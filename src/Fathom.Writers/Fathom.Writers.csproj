@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Fathom.Core\Fathom.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Fathom.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <Description>Fathom's streaming output writers: CSV (Loadstone-import-ready — a flat export writes one file, a hierarchical one writes a zip of one _key/_parentKey-linked file per entity, exactly Loadstone's own hierarchical CSV convention in reverse), JSON, and XML. All three write incrementally straight to the response stream.</Description>
+  </PropertyGroup>
+
+</Project>

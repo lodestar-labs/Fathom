@@ -1,0 +1,35 @@
+{
+  "name": "orders",
+  "version": "1",
+  "description": "Customer orders with their lines",
+  "root": {
+    "name": "Order",
+    "table": "Orders",
+    "keyColumn": "OrderId",
+    "fields": [
+      { "name": "OrderNumber" },
+      { "name": "OrderDate", "type": "Date" },
+      { "name": "Country", "lookup": "countries" },
+      { "name": "Total", "type": "Decimal" }
+    ],
+    "children": [
+      {
+        "name": "Line",
+        "table": "OrderLines",
+        "keyColumn": "LineId",
+        "parentKeyColumn": "OrderId",
+        "fields": [
+          { "name": "LineNumber", "type": "Int32" },
+          { "name": "Sku" },
+          { "name": "Quantity", "type": "Int32" }
+        ]
+      }
+    ]
+  },
+  "filters": [
+    { "name": "country", "entity": "Order", "field": "Country", "requestLookup": "countries" },
+    { "name": "orderDateFrom", "entity": "Order", "field": "OrderDate", "operator": "GreaterThanOrEqual", "valueType": "Date" },
+    { "name": "orderDateTo", "entity": "Order", "field": "OrderDate", "operator": "LessThanOrEqual", "valueType": "Date" },
+    { "name": "orderNumber", "entity": "Order", "field": "OrderNumber" }
+  ]
+}

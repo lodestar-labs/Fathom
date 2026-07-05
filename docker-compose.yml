@@ -1,0 +1,42 @@
+# Local evaluation stack. Override the dev database password with:
+#   FATHOM_DB_PASSWORD=... docker compose up
+#
+# Health, OpenAPI (/openapi/v1.json), and the Scalar docs UI (/scalar) all work as soon as
+# the stack is up. Calling the protected /api/exports endpoints needs a real Entra ID app
+# registration — set AzureAd__TenantId and AzureAd__ClientId below to yours.
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${FATHOM_DB_PASSWORD:-Fathom!Dev1}"
+    ports:
+      # Bound to localhost only — the app reaches the db over the compose network.
+      - "127.0.0.1:14334:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -Q 'SELECT 1' -b"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  fathom:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Fathom: "Server=db;Database=Fathom;User Id=sa;Password=${FATHOM_DB_PASSWORD:-Fathom!Dev1};TrustServerCertificate=True"
+      Fathom__DefinitionDirectory: "/app/data/exports"
+      AzureAd__Instance: "https://login.microsoftonline.com/"
+      AzureAd__TenantId: "${AZURE_TENANT_ID:-}"
+      AzureAd__ClientId: "${AZURE_CLIENT_ID:-}"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./samples/orders/orders.export.json:/app/data/exports/orders.json
+
+volumes:
+  mssql-data:
