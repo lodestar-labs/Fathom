@@ -73,6 +73,18 @@ public class FilterResolverTests
     }
 
     [Test]
+    public void An_oversized_In_list_is_a_clean_client_error_not_a_sql_exception()
+    {
+        var definition = TestData.Orders();
+        definition.Filters.Add(new FilterDefinition { Name = "many", Entity = "Order", Field = "OrderNumber", Operator = FilterOperator.In });
+        var tooMany = Enumerable.Range(0, 2001).Select(i => i.ToString()).ToArray();
+
+        var ex = Assert.ThrowsAsync<FilterValidationException>(() =>
+            Resolver().ResolveAsync(definition, [new FilterValue("many", tooMany)]));
+        Assert.That(ex!.Message, Does.Contain("at most 2000"));
+    }
+
+    [Test]
     public async Task IsNull_filter_carries_no_values_even_if_the_request_supplied_some()
     {
         var definition = TestData.Orders();

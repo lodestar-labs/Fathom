@@ -9,18 +9,31 @@ public class StagingSqlBuilderTests
     [Test]
     public void Root_staging_numbers_rows_by_key_and_stages_a_zero_parent()
     {
-        var (sql, parameters) = StagingSqlBuilder.BuildStagingSql(TestData.Orders().Root, parent: null, []);
+        var root = TestData.Orders().Root;
+        var temp = StagingSqlBuilder.TempTableName(root);
+        var (sql, parameters) = StagingSqlBuilder.BuildStagingSql(root, parent: null, []);
 
         Assert.Multiple(() =>
         {
             Assert.That(sql, Does.Contain("ROW_NUMBER() OVER (ORDER BY [OrderId]) AS RowNumber"));
             Assert.That(sql, Does.Contain("CAST(0 AS bigint) AS ParentRowNumber"));
             Assert.That(sql, Does.Contain("[OrderId] AS RealKey"));
-            Assert.That(sql, Does.Contain("INTO #fathom_Order"));
+            Assert.That(sql, Does.Contain($"INTO {temp}"));
             Assert.That(sql, Does.Contain("FROM [dbo].[Orders]"));
-            Assert.That(sql, Does.Contain("CREATE UNIQUE CLUSTERED INDEX [IX_Order_RealKey] ON #fathom_Order(RealKey)"));
+            Assert.That(sql, Does.Contain($"ON {temp}(RealKey)"));
             Assert.That(parameters, Is.Empty);
         });
+    }
+
+    [Test]
+    public void Distinct_entity_names_that_sanitize_alike_get_distinct_temp_tables()
+    {
+        // "A-B" and "A.B" both sanitize to A_B; the hash suffix must keep them apart, or the
+        // second SELECT INTO collides with the first at run time.
+        var dash = new EntityDefinition { Name = "A-B", Table = "T", KeyColumn = "Id", Fields = [new FieldDefinition { Name = "X" }] };
+        var dot = new EntityDefinition { Name = "A.B", Table = "T", KeyColumn = "Id", Fields = [new FieldDefinition { Name = "X" }] };
+
+        Assert.That(StagingSqlBuilder.TempTableName(dash), Is.Not.EqualTo(StagingSqlBuilder.TempTableName(dot)));
     }
 
     [Test]
@@ -42,15 +55,55 @@ public class StagingSqlBuilderTests
     public void Child_staging_joins_to_the_parents_staged_table_by_real_key()
     {
         var definition = TestData.Orders();
+        var childTemp = StagingSqlBuilder.TempTableName(definition.Root.Children[0]);
+        var parentTemp = StagingSqlBuilder.TempTableName(definition.Root);
         var (sql, _) = StagingSqlBuilder.BuildStagingSql(definition.Root.Children[0], definition.Root, []);
 
         Assert.Multiple(() =>
         {
-            Assert.That(sql, Does.Contain("INTO #fathom_Line"));
+            Assert.That(sql, Does.Contain($"INTO {childTemp}"));
             Assert.That(sql, Does.Contain("FROM [dbo].[OrderLines] AS c"));
-            Assert.That(sql, Does.Contain("INNER JOIN #fathom_Order AS p ON c.[OrderId] = p.RealKey"));
+            Assert.That(sql, Does.Contain($"INNER JOIN {parentTemp} AS p ON c.[OrderId] = p.RealKey"));
             Assert.That(sql, Does.Contain("ROW_NUMBER() OVER (ORDER BY ParentRowNumber, RealKey) AS RowNumber"));
             Assert.That(sql, Does.Contain("c.[LineId] AS RealKey"));
+        });
+    }
+
+    [Test]
+    public void Direct_select_for_a_flat_export_never_touches_a_temp_table()
+    {
+        var flatRoot = TestData.Orders().Root;
+        flatRoot.Children.Clear();
+
+        var (sql, parameters) = StagingSqlBuilder.BuildDirectSelectSql(flatRoot, []);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sql, Does.Not.Contain("INTO #"), "no staging");
+            Assert.That(sql, Does.Contain("ROW_NUMBER() OVER (ORDER BY [OrderId]) AS RowNumber"));
+            Assert.That(sql, Does.Contain("CAST(0 AS bigint) AS ParentRowNumber"));
+            Assert.That(sql, Does.Contain("FROM [dbo].[Orders]"));
+            // Ordered by the synthetic alias, not the key column: a field alias could shadow
+            // a source column name, and the alias is the one name guaranteed unambiguous.
+            Assert.That(sql, Does.Contain("ORDER BY RowNumber;"));
+            Assert.That(parameters, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Direct_select_parameterizes_filters_exactly_like_staging_does()
+    {
+        var flatRoot = TestData.Orders().Root;
+        flatRoot.Children.Clear();
+        var filter = new FilterDefinition { Name = "orderNumber", Entity = "Order", Field = "OrderNumber" };
+        var resolved = new ResolvedFilter(filter, ["ORD-1"]);
+
+        var (sql, parameters) = StagingSqlBuilder.BuildDirectSelectSql(flatRoot, [resolved]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sql, Does.Contain("WHERE [OrderNumber] = @p_Order_0"));
+            Assert.That(parameters.Single().Value, Is.EqualTo("ORD-1"));
         });
     }
 

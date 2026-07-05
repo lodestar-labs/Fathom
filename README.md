@@ -37,15 +37,26 @@ instead. Fathom is that program, written once, generalized:
   The built-in code-list provider covers the common case; anything else — a REST API,
   another database, a static dictionary — is one small interface away.
 - **Every value is parameterized, always.** Client-supplied filter values are bound as SQL
-  parameters unconditionally, regardless of operator or lookup — table and column names
-  come only from the trusted, admin-authored export definition, never from a request.
+  parameters unconditionally, regardless of operator or lookup. Table, schema, and column
+  names come only from the admin-authored definition — and even there they are both
+  bracket-quoted (with `]`-doubling) and validated at registration, so a definition can't
+  smuggle SQL through an identifier either. See [Security model](#security-model).
+- **Strict by default.** An unrecognized query parameter is a 400 naming the mistake, never
+  silently ignored — a typo'd filter name must not quietly export the whole unfiltered
+  table. Output names are validated at registration so an exotic entity name can't break
+  XML or zip output mid-stream.
 - **Security is pluggable.** Azure Entra ID today, via `Microsoft.Identity.Web` — but the
   endpoints themselves have no Entra-specific code. They require a standard authenticated
   principal through ASP.NET Core's ordinary authorization pipeline, so swapping in a
   different identity provider is replacing one `AddAuthentication()` call, not a rewrite.
-- **Built for throughput.** MARS-backed streaming reads, `IAsyncEnumerable` end to end,
-  writers that emit incrementally straight to the response — memory stays bounded and
-  nothing waits for the full result set before the first byte goes out.
+- **Built for throughput.** MARS-backed streaming reads with `SequentialAccess` (wide
+  text columns stream instead of buffering), `IAsyncEnumerable` end to end, one shared
+  frozen field map per entity instead of a dictionary per row, writers that emit
+  incrementally straight to the response, and brotli/gzip compression when the client
+  asks for it. Flat exports skip the staging step entirely — one direct streaming SELECT,
+  zero tempdb I/O — since staging exists only to give child levels a parent to correlate
+  with. Memory stays bounded and nothing waits for the full result set before the first
+  byte goes out.
 - **Observability is not an afterthought.** Structured logs (Serilog), traces and metrics
   (OpenTelemetry) — a span per export tagged with outcome and duration, counters for rows
   exported per entity — and split liveness/readiness health checks.
@@ -168,6 +179,48 @@ Replace that with any other ASP.NET Core authentication scheme to use a differen
 identity provider — nothing downstream (the endpoints, the query engine, the writers) has
 any Entra-specific code; they only ever see a standard authenticated `ClaimsPrincipal`.
 
+## Security model
+
+Fathom is a governed export surface, and its safety rests on a few explicit boundaries —
+stated here so you can reason about them rather than discover them.
+
+- **Authentication is required; authorization is currently coarse.** Every `/api/*` route
+  requires an authenticated principal. It does not *yet* distinguish who may **author**
+  definitions (`PUT`/`DELETE /api/exports/{name}`) from who may **run** them — any
+  authenticated caller can do both. Until per-export authorization lands (top of the
+  [roadmap](#roadmap)), put the authoring endpoints behind a gateway policy or network
+  boundary if your run-access population is broader than your admin population.
+- **Least privilege is load-bearing, not optional.** Because an authenticated caller can
+  register a definition pointing at any table the connection can read, Fathom's SQL login
+  should be scoped to exactly the tables and views you intend to expose — `db_datareader`
+  on a dedicated reporting schema, not `db_owner`. Fathom generates only parameterized
+  `SELECT`/`SELECT INTO #temp` against that login; it never needs write or DDL rights on
+  your real tables.
+- **SQL injection is closed on two layers.** Filter *values* are always `SqlParameter`s.
+  Identifiers (schema, table, column) come only from a definition, are bracket-quoted with
+  `]`-doubling exactly like columns, **and** are validated at registration (no control
+  characters, ≤128 chars) — so neither a filter value nor a hostile identifier in a
+  definition can break out into executable SQL.
+- **Names are validated to be output-safe.** Export/entity/field/filter names must be valid
+  XML names, checked with the same `XmlConvert` the XML writer uses, so a name can't corrupt
+  an XML or zip response after it has started streaming, appear in a `Content-Disposition`
+  header unescaped, or escape the definition directory as a file path.
+- **Unauthenticated surface is deliberate and bounded.** `/health/live`, `/health/ready`,
+  `/openapi/v1.json`, and `/scalar` are anonymous by design (probes and docs). The
+  readiness probe's database check is cached for a few seconds and single-flighted, so it
+  can't be turned into a connection-pool-exhaustion amplifier.
+- **Response hardening.** `X-Content-Type-Options: nosniff` on every response; opt-in
+  brotli/gzip compression (safe here — a data export reflects no secret next to
+  attacker-controlled input, so BREACH doesn't apply; already-compressed zip output is
+  excluded).
+- **Two things to know operationally.** (1) Filter values travel in the query string
+  (`?country=Denmark`), so they can appear in access logs and in any tracing backend that
+  captures `url.query` — treat those sinks accordingly if filter values are sensitive.
+  (2) CSV is exported faithfully, without prefixing cells that begin with `=`/`+`/`-`/`@`;
+  that keeps data exact and Loadstone-round-trippable but means a spreadsheet app may
+  interpret such a cell as a formula. Treat exported CSV as untrusted input in Excel, or
+  post-process it, if the source data is user-controlled.
+
 ## Observability
 
 - **Logs** — structured Serilog output; ship them anywhere Serilog can (console by
@@ -193,7 +246,9 @@ Fathom is a single ASP.NET Core app, which is exactly the shape Azure App Servic
 2. Create an App Service (or container app) from the provided Dockerfile, and an Azure SQL
    database.
 3. Set `ConnectionStrings__Fathom` (Key Vault reference recommended) and
-   `AzureAd__TenantId` / `AzureAd__ClientId` from step 1.
+   `AzureAd__TenantId` (your specific tenant GUID — a wildcard like `common` accepts any
+   Microsoft tenant and logs a startup warning) / `AzureAd__ClientId` from step 1. Point the
+   connection string at a **least-privilege login** (see [Security model](#security-model)).
 4. Point `Fathom__DefinitionDirectory` at the persistent `%HOME%\data` share if you author
    definitions as files rather than through `PUT /api/exports/{name}`.
 5. Optional: set `OTEL_EXPORTER_OTLP_ENDPOINT` to light up Application Insights via the

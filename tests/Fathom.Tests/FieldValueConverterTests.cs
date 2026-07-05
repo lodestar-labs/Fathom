@@ -6,17 +6,6 @@ namespace Fathom.Tests;
 [TestFixture]
 public class FieldValueConverterTests
 {
-    [TestCase(FieldType.String, typeof(string))]
-    [TestCase(FieldType.Int32, typeof(int))]
-    [TestCase(FieldType.Int64, typeof(long))]
-    [TestCase(FieldType.Decimal, typeof(decimal))]
-    [TestCase(FieldType.Boolean, typeof(bool))]
-    [TestCase(FieldType.DateTime, typeof(DateTime))]
-    [TestCase(FieldType.Date, typeof(DateTime))]
-    [TestCase(FieldType.Guid, typeof(Guid))]
-    public void ClrTypeFor_matches_the_declared_field_type(FieldType type, Type expected) =>
-        Assert.That(FieldValueConverter.ClrTypeFor(type), Is.EqualTo(expected));
-
     [Test]
     public void Parse_int32_uses_invariant_culture() =>
         Assert.That(FieldValueConverter.Parse(FieldType.Int32, "42"), Is.EqualTo(42));
@@ -98,6 +87,30 @@ public class FieldValueConverterTests
     [Test]
     public void ToOutputString_of_int_uses_plain_digits() =>
         Assert.That(FieldValueConverter.ToOutputString(42), Is.EqualTo("42"));
+
+    [Test]
+    public void A_date_typed_field_renders_as_a_plain_date_not_a_midnight_timestamp()
+    {
+        var midnight = new DateTime(2026, 6, 10);
+        Assert.Multiple(() =>
+        {
+            Assert.That(FieldValueConverter.ToOutputString(FieldType.Date, midnight), Is.EqualTo("2026-06-10"));
+            Assert.That(FieldValueConverter.ToOutputString(FieldType.DateTime, midnight), Does.StartWith("2026-06-10T00:00:00"));
+            Assert.That(FieldValueConverter.ToOutputString(FieldType.Date, "not-a-date"), Is.EqualTo("not-a-date"),
+                "a non-DateTime value passes through untouched");
+        });
+    }
+
+    [Test]
+    public void ToOutputString_of_binary_is_base64_not_the_type_name()
+    {
+        var rendered = FieldValueConverter.ToOutputString(new byte[] { 1, 2, 3 });
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered, Is.EqualTo("AQID"));
+            Assert.That(rendered, Does.Not.Contain("Byte[]"));
+        });
+    }
 
     /// <summary>Temporarily swaps the current thread's culture, restoring it on dispose.</summary>
     private sealed class CultureScope : IDisposable

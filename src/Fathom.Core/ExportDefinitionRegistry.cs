@@ -118,7 +118,17 @@ public sealed class ExportDefinitionDirectoryStore(string directory, ILogger<Exp
 
     private string PathFor(string name)
     {
-        var safe = string.Concat(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
-        return Path.Combine(directory, $"{safe}.json");
+        // A registered name is a validated XML NCName, which is already a safe, injective file
+        // name (letters/digits/_/-/. only, and — since '.' is not a valid start char — never
+        // "." or ".."). Use it verbatim rather than sanitizing, which previously mapped '.'
+        // to '_' and let "a.b" and "a_b" overwrite each other's files. Reject anything that
+        // didn't come through validation, so a hand-crafted name can never escape the directory.
+        if (!ExportDefinition.IsValidName(name))
+        {
+            throw new ArgumentException(
+                $"Refusing to derive a file path from unsafe export name '{name}'.", nameof(name));
+        }
+
+        return Path.Combine(directory, $"{name}.json");
     }
 }

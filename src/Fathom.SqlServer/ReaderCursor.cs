@@ -4,14 +4,18 @@ using Microsoft.Data.SqlClient;
 namespace Fathom.SqlServer;
 
 /// <summary>
-/// A one-row lookahead over one entity's final, merge-ordered <see cref="SqlDataReader"/>.
-/// <see cref="ExportQueryEngine"/> holds one cursor per entity and walks them in lockstep —
-/// this is what turns N independently-staged, ROW_NUMBER-ordered result sets back into a
-/// tree without ever materializing a whole level in memory.
+/// A one-row lookahead over one entity's final, merge-ordered <see cref="SqlDataReader"/> —
+/// the SQL-backed <see cref="ILevelCursor"/> the engine hands to <see cref="HierarchyMerger"/>.
+/// Reads columns strictly in ascending ordinal order (RowNumber, ParentRowNumber, then fields
+/// in declaration order — exactly the order the final SELECT emits them), which keeps it
+/// compatible with <see cref="System.Data.CommandBehavior.SequentialAccess"/> so wide
+/// text/binary columns stream instead of being buffered whole per row.
 /// </summary>
-internal sealed class ReaderCursor(SqlCommand command, SqlDataReader reader, EntityDefinition entity) : IAsyncDisposable
+internal sealed class ReaderCursor(SqlCommand command, SqlDataReader reader, EntityDefinition entity)
+    : ILevelCursor, IAsyncDisposable
 {
-    private int[]? _fieldOrdinals;
+    private readonly FieldSchema _schema = FieldSchema.For(entity);
+    private readonly int _fieldCount = entity.Fields.Count;
 
     public bool HasCurrent { get; private set; }
 
@@ -30,19 +34,20 @@ internal sealed class ReaderCursor(SqlCommand command, SqlDataReader reader, Ent
             return;
         }
 
-        _fieldOrdinals ??= [.. entity.Fields.Select(f => reader.GetOrdinal(f.Name))];
-
         CurrentRowNumber = reader.GetInt64(0);
         CurrentParentRowNumber = reader.GetInt64(1);
 
-        var values = new Dictionary<string, object?>(entity.Fields.Count, StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < entity.Fields.Count; i++)
+        var values = new object?[_fieldCount];
+        for (var i = 0; i < _fieldCount; i++)
         {
-            var ordinal = _fieldOrdinals[i];
-            values[entity.Fields[i].Name] = reader.IsDBNull(ordinal) ? null : reader.GetValue(ordinal);
+            // Field i sits at ordinal i + 2 by construction of the SELECT list.
+            var ordinal = i + 2;
+            values[i] = await reader.IsDBNullAsync(ordinal, cancellationToken)
+                ? null
+                : reader.GetValue(ordinal);
         }
 
-        CurrentValues = values;
+        CurrentValues = new FieldValueMap(_schema, values);
         HasCurrent = true;
     }
 

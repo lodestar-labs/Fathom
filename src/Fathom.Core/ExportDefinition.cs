@@ -45,6 +45,56 @@ public sealed class ExportDefinition
         EnumerateEntities().FirstOrDefault(e => e.Children.Contains(entity));
 
     /// <summary>
+    /// Output names (export, entity, field, filter) travel everywhere a value name can go:
+    /// XML element names, zip entry file names, URL route segments, query keys, definition
+    /// file names, and the Content-Disposition download file name. Rather than let an exotic
+    /// name blow up one of those mid-stream (an XML element may not contain a space; a zip
+    /// entry must not contain a path separator), names are constrained at registration to a
+    /// valid XML NCName: a letter or '_' first, then letters, digits, '_', '-', or '.'. The
+    /// XML rule is the strictest of the destinations, so satisfying it satisfies all of them —
+    /// and it is checked with the same <see cref="System.Xml.XmlConvert"/> the XML writer uses,
+    /// so a Unicode letter that .NET accepts but XML rejects can't slip through and corrupt a
+    /// response after it has started streaming.
+    /// </summary>
+    internal static bool IsValidName(string name) =>
+        name.Length > 0
+        && System.Xml.XmlConvert.IsStartNCNameChar(name[0])
+        && name.All(System.Xml.XmlConvert.IsNCNameChar);
+
+    private static string NameRuleError(string what, string name) =>
+        $"{what} name '{name}' is invalid: names must be a valid XML name — a letter or '_' first, then letters, digits, '_', '-', or '.'.";
+
+    /// <summary>
+    /// A physical database identifier (schema, table, column) is safe to bracket-quote into
+    /// generated SQL. Bracket-quoting with <c>]</c>-doubling already neutralizes injection
+    /// completely; this is the belt to that suspenders — it rejects control characters (which
+    /// have no place in an identifier and could enable log-injection or odd driver behavior)
+    /// and enforces SQL Server's 128-character identifier limit, catching a malformed or
+    /// hostile definition at registration instead of at the first export run.
+    /// </summary>
+    private static bool IsSafeSqlIdentifier(string identifier) =>
+        identifier.Length is > 0 and <= 128
+        && !identifier.Any(char.IsControl);
+
+    private static string IdentifierRuleError(string what, string entity, string identifier) =>
+        $"Entity '{entity}': {what} '{identifier}' is invalid — database identifiers must be 1–128 characters with no control characters.";
+
+    /// <summary>
+    /// Column names the engine synthesizes when staging and reading levels. A field with one
+    /// of these output names would collide with its synthetic namesake in the generated
+    /// SELECT lists (duplicate column in SELECT INTO is a SQL error) — rejected up front.
+    /// </summary>
+    private static readonly string[] ReservedFieldNames = ["RowNumber", "ParentRowNumber", "RealKey"];
+
+    /// <summary>
+    /// Upper bound on entities in one export. Each entity is its own staging round trip and
+    /// its own open reader held for the export's lifetime, so an export with thousands of
+    /// levels is a resource-exhaustion hazard, not a real hierarchy — reject it at
+    /// registration. Comfortably above any genuine relational hierarchy.
+    /// </summary>
+    private const int MaxEntities = 100;
+
+    /// <summary>
     /// Structural validation of the document itself. Returns every problem found so authors
     /// fix them all in one pass; an empty list means the definition is usable.
     /// </summary>
@@ -54,6 +104,16 @@ public sealed class ExportDefinition
         if (string.IsNullOrWhiteSpace(Name))
         {
             errors.Add("Export 'name' is required.");
+        }
+        else if (!IsValidName(Name))
+        {
+            errors.Add(NameRuleError("Export", Name));
+        }
+
+        var entityCount = EnumerateEntities().Count();
+        if (entityCount > MaxEntities)
+        {
+            errors.Add($"Export has {entityCount} entities; the maximum is {MaxEntities}.");
         }
 
         var seenEntities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -65,6 +125,11 @@ public sealed class ExportDefinition
                 continue;
             }
 
+            if (!IsValidName(entity.Name))
+            {
+                errors.Add(NameRuleError("Entity", entity.Name));
+            }
+
             if (!seenEntities.Add(entity.Name))
             {
                 errors.Add($"Entity '{entity.Name}': names must be unique within an export.");
@@ -74,16 +139,33 @@ public sealed class ExportDefinition
             {
                 errors.Add($"Entity '{entity.Name}': 'table' is required.");
             }
+            else if (!IsSafeSqlIdentifier(entity.Table))
+            {
+                errors.Add(IdentifierRuleError("table", entity.Name, entity.Table));
+            }
+
+            if (!string.IsNullOrEmpty(entity.Schema) && !IsSafeSqlIdentifier(entity.Schema))
+            {
+                errors.Add(IdentifierRuleError("schema", entity.Name, entity.Schema));
+            }
 
             if (string.IsNullOrWhiteSpace(entity.KeyColumn))
             {
                 errors.Add($"Entity '{entity.Name}': 'keyColumn' is required.");
+            }
+            else if (!IsSafeSqlIdentifier(entity.KeyColumn))
+            {
+                errors.Add(IdentifierRuleError("keyColumn", entity.Name, entity.KeyColumn));
             }
 
             var isRoot = ReferenceEquals(entity, Root);
             if (!isRoot && string.IsNullOrWhiteSpace(entity.ParentKeyColumn))
             {
                 errors.Add($"Entity '{entity.Name}': 'parentKeyColumn' is required on every non-root entity.");
+            }
+            else if (entity.ParentKeyColumn is { } parentKey && !IsSafeSqlIdentifier(parentKey))
+            {
+                errors.Add(IdentifierRuleError("parentKeyColumn", entity.Name, parentKey));
             }
 
             if (entity.Fields.Count == 0)
@@ -102,6 +184,19 @@ public sealed class ExportDefinition
                 {
                     errors.Add($"Entity '{entity.Name}': duplicate field '{field.Name}'.");
                 }
+                else if (!IsValidName(field.Name))
+                {
+                    errors.Add(NameRuleError($"Entity '{entity.Name}' field", field.Name));
+                }
+                else if (ReservedFieldNames.Contains(field.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    errors.Add($"Entity '{entity.Name}': field name '{field.Name}' is reserved (RowNumber, ParentRowNumber, and RealKey are used internally by the engine).");
+                }
+
+                if (field.Column is { } column && !IsSafeSqlIdentifier(column))
+                {
+                    errors.Add(IdentifierRuleError($"field '{field.Name}' column", entity.Name, column));
+                }
             }
         }
 
@@ -111,6 +206,11 @@ public sealed class ExportDefinition
             {
                 errors.Add("Every filter requires a 'name'.");
                 continue;
+            }
+
+            if (!IsValidName(filter.Name))
+            {
+                errors.Add(NameRuleError("Filter", filter.Name));
             }
 
             var entity = FindEntity(filter.Entity);
@@ -155,7 +255,15 @@ public sealed class EntityDefinition
 
     public List<EntityDefinition> Children { get; set; } = [];
 
-    public string QualifiedTable => $"[{Schema}].[{Table}]";
+    /// <summary>
+    /// The bracket-quoted <c>[schema].[table]</c> the query engine reads from. Both parts are
+    /// quoted with <c>]</c>-doubling — identical to how every column is quoted — so that even
+    /// though schema/table come from the (admin-authored, lower-trust) definition rather than
+    /// from a request, a name containing a <c>]</c> can never break out of the brackets into
+    /// injectable SQL. Registration additionally rejects such names outright
+    /// (see <see cref="Validate"/>), making this defense-in-depth.
+    /// </summary>
+    public string QualifiedTable => $"[{Schema.Replace("]", "]]")}].[{Table.Replace("]", "]]")}]";
 
     public FieldDefinition? FindField(string name) =>
         Fields.FirstOrDefault(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));

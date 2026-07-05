@@ -11,11 +11,9 @@ public sealed class FathomOptions
     public string DefinitionDirectory { get; set; } = "data/exports";
 
     /// <summary>
-    /// Abandon an export run that has produced no progress for this long. Guards against a
-    /// pathological query or a client that never reads its response stream.
+    /// Per-SQL-command timeout for an export run: bounds each staging statement and the start
+    /// of each level's read. Guards against a pathological query; it does not (yet) bound a
+    /// client stalling mid-stream — that is tracked on the roadmap.
     /// </summary>
     public TimeSpan ExportTimeout { get; set; } = TimeSpan.FromMinutes(30);
-
-    /// <summary>Batch size for SqlBulkCopy-style staging reads (rows per fetch), tuned for throughput over latency.</summary>
-    public int FetchBufferSize { get; set; } = 2000;
 }

@@ -42,6 +42,17 @@ public class JsonExportWriterTests
     }
 
     [Test]
+    public async Task Date_typed_fields_render_as_plain_dates()
+    {
+        var definition = TestData.Orders();
+        using var output = new MemoryStream();
+        await Writer.WriteAsync(output, definition, AsAsync(SampleOrders(definition)));
+
+        using var doc = JsonDocument.Parse(output.ToArray());
+        Assert.That(doc.RootElement[0].GetProperty("OrderDate").GetString(), Is.EqualTo("2026-06-10"));
+    }
+
+    [Test]
     public async Task An_entity_with_no_rows_writes_an_empty_array()
     {
         var definition = TestData.Orders();

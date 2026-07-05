@@ -5,6 +5,10 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Fathom.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <Description>Contracts for Fathom: the export-definition model, hierarchy, filters, the dual lookup-provider abstractions, and the definition registry.</Description>
   </PropertyGroup>

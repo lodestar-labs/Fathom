@@ -34,7 +34,6 @@ try
             "No database configured. Set Fathom:ConnectionString or ConnectionStrings:Fathom.")
         .Validate(o => !string.IsNullOrWhiteSpace(o.DefinitionDirectory), "Fathom:DefinitionDirectory must be set.")
         .Validate(o => o.ExportTimeout > TimeSpan.Zero, "Fathom:ExportTimeout must be positive.")
-        .Validate(o => o.FetchBufferSize >= 1, "Fathom:FetchBufferSize must be at least 1.")
         .ValidateOnStart();
 
     var fathom = builder.Services.AddFathom().UseSqlServer();
@@ -57,6 +56,18 @@ try
         provider.GetRequiredService<ILogger<ExportDefinitionDirectoryStore>>()));
     builder.Services.AddHostedService<FathomInitializer>();
 
+    // A wildcard tenant accepts tokens from ANY Microsoft tenant — for a single-tenant data
+    // export API that is almost never intended and quietly widens the trust boundary, so warn
+    // loudly at startup. Set AzureAd:TenantId to your specific tenant GUID.
+    var configuredTenant = builder.Configuration["AzureAd:TenantId"];
+    if (configuredTenant is "common" or "organizations" or "consumers")
+    {
+        Log.Warning(
+            "AzureAd:TenantId is '{TenantId}', which accepts tokens from any Microsoft tenant. "
+            + "Set it to your specific tenant GUID unless multi-tenant access is intended.",
+            configuredTenant);
+    }
+
     // Azure Entra ID today — swap AddMicrosoftIdentityWebApi for any other ASP.NET Core
     // authentication scheme to use a different identity provider instead. Nothing past this
     // call (the endpoints, the query engine, the writers) has any Entra-specific code in it;
@@ -65,9 +76,22 @@ try
         .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
     builder.Services.AddAuthorization();
 
+    // Cached DB readiness probe needs a clock; TimeProvider isn't registered by default.
+    builder.Services.AddSingleton(TimeProvider.System);
+
     builder.Services.AddProblemDetails();
     builder.Services.AddHealthChecks()
         .AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
+
+    // Exports are usually network-bound, so opt-in (Accept-Encoding) compression is one of
+    // the biggest real-world speedups available. Zip output is deliberately absent from the
+    // list — it is already compressed. Enabled over HTTPS too: BREACH-style attacks need a
+    // secret reflected next to attacker-controlled content, which a data export is not.
+    builder.Services.AddResponseCompression(compression =>
+    {
+        compression.EnableForHttps = true;
+        compression.MimeTypes = ["application/json", "application/xml", "text/csv"];
+    });
 
     builder.Services.AddOpenApi(options =>
     {
@@ -96,7 +120,15 @@ try
 
     // Unhandled exceptions become RFC 7807 problem responses instead of bare 500s.
     app.UseExceptionHandler();
+    app.UseResponseCompression();
     app.UseSerilogRequestLogging();
+
+    // Every response serves data or docs, never markup to be sniffed into something else.
+    app.Use(async (context, next) =>
+    {
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        await next();
+    });
 
     app.UseAuthentication();
     app.UseAuthorization();

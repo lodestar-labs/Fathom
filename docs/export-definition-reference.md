@@ -13,6 +13,21 @@ Definitions can be registered three ways, all equivalent:
 Property names are camelCase and case-insensitive. Enum values are PascalCase strings
 (`"Date"`, `"GreaterThanOrEqual"`, ...).
 
+## Names
+
+Output names — the export name, entity names, field names, and filter names — travel
+everywhere a value name can go: XML element names, zip entry file names, URL route
+segments, query-string keys, and the download file name. So names are constrained at
+registration rather than allowed to break one of those formats mid-stream: **a letter or
+underscore first, then letters, digits, `_`, `-`, or `.`**. Unicode letters are welcome
+(`Præmie` is a fine field name); spaces, separators, and quotes are not. Physical
+database identifiers (`table`, `schema`, `keyColumn`, `column`, ...) are *not* restricted —
+they are always bracket-quoted in generated SQL and never appear in output.
+
+Three field names are reserved for the engine's own staging columns: `RowNumber`,
+`ParentRowNumber`, and `RealKey` (case-insensitive). A source *column* with one of those
+names is fine — map it to a different output name with `column`.
+
 ## Top level
 
 | Property | Type | Default | Description |
@@ -46,8 +61,10 @@ fan-out, or total row count.
 | --- | --- | --- | --- |
 | `name` | string | required | Output name — the JSON property, XML element, or CSV header. |
 | `column` | string | `name` | Source column, when it differs from the output name. |
-| `type` | enum | `String` | `String`, `Int32`, `Int64`, `Decimal`, `Boolean`, `DateTime`, `Date`, `Guid`. |
+| `type` | enum | `String` | `String`, `Int32`, `Int64`, `Decimal`, `Boolean`, `DateTime`, `Date`, `Guid`. Values render from their actual database types; declaring `Date` additionally renders the value as a plain `yyyy-MM-dd` date instead of a midnight timestamp (SQL Server surfaces `date` columns as timestamps). |
 | `lookup` | string | – | Name of a registered export lookup provider that maps this field's raw value to its output form (e.g. a numeric code to a string). |
+
+Binary (`varbinary`) values render as base64 in every format.
 
 ## Filters
 
@@ -69,6 +86,16 @@ take none (any values supplied are ignored). Repeat the query key for multiple v
 All filter values are always bound as SQL parameters, never concatenated into the
 generated statement — this holds regardless of `operator`, `requestLookup`, or how the
 raw string looks.
+
+Filter binding is **strict**: a query key that is neither a declared filter nor `format`
+is rejected with a 400 naming the unknown key and listing what the export supports. For a
+data-export API, silently ignoring a typo'd filter name (`?countryy=DK`) would mean
+serving the entire unfiltered table — a data-governance incident, not a convenience.
+
+A filter on a child entity narrows which child rows are exported; it does not remove
+parents whose children were all filtered away (they export with an empty child set).
+Filters on the root narrow everything, since children are correlated to the exported
+parents.
 
 ## Lookups
 
@@ -144,3 +171,15 @@ host, not the library: Fathom's endpoints only require a standard authenticated
 Entra-specific code anywhere past the `AddAuthentication()` call. Swap
 `AddMicrosoftIdentityWebApi(...)` for any other ASP.NET Core authentication scheme to use
 a different identity provider.
+
+Authorization is currently coarse: any authenticated caller can both author and run
+exports. Because authoring a definition lets a caller point at any table the SQL login can
+read, **the SQL login must be least-privilege** — `db_datareader` on exactly the schema you
+intend to expose, never `db_owner`. Fathom only ever issues parameterized reads.
+
+Injection is closed on two layers. Filter *values* are always bound as `SqlParameter`s.
+Identifiers (schema, table, column) come only from the definition, are bracket-quoted with
+`]`-doubling, and are validated at registration (no control characters, 1–128 characters) —
+so neither a request value nor a hostile identifier in a definition can reach executable
+SQL. The full trust model, the anonymous-endpoint rationale, and the operational notes on
+query-string logging and CSV-in-spreadsheets are in the README's **Security model** section.

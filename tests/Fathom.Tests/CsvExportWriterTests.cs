@@ -24,7 +24,7 @@ public class CsvExportWriterTests
             Root = new EntityDefinition { Name = "Order", Table = "Orders", KeyColumn = "OrderId", Fields = [new FieldDefinition { Name = "Total" }] },
         };
 
-        Assert.That(Writer.GetContentType(flat), Is.EqualTo("text/csv"));
+        Assert.That(Writer.GetContentType(flat), Is.EqualTo("text/csv; charset=utf-8"));
     }
 
     [Test]

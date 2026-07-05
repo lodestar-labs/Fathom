@@ -44,7 +44,16 @@ internal sealed class ExportRowJsonConverter : JsonConverter<ExportRow>
         foreach (var field in value.Entity.Fields)
         {
             writer.WritePropertyName(field.Name);
-            WriteValue(writer, value.Values.GetValueOrDefault(field.Name));
+            var fieldValue = value.Values.GetValueOrDefault(field.Name);
+            if (field.Type == FieldType.Date && fieldValue is DateTime date)
+            {
+                // A declared date field renders as a date, not a midnight timestamp.
+                writer.WriteStringValue(date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                WriteValue(writer, fieldValue);
+            }
         }
 
         foreach (var group in value.Children.GroupBy(c => c.Entity.Name))
@@ -101,6 +110,9 @@ internal sealed class ExportRowJsonConverter : JsonConverter<ExportRow>
                 break;
             case Guid g:
                 writer.WriteStringValue(g);
+                break;
+            case byte[] bytes:
+                writer.WriteBase64StringValue(bytes);
                 break;
             default:
                 writer.WriteStringValue(FieldValueConverter.ToOutputString(value));

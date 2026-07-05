@@ -17,10 +17,32 @@ namespace Fathom.SqlServer;
 /// </summary>
 internal static class StagingSqlBuilder
 {
-    public static string TempTableName(EntityDefinition entity) => $"#fathom_{Sanitize(entity.Name)}";
+    // A readable prefix for debugging, plus a deterministic hash of the full name so that two
+    // distinct entity names can never collapse to the same temp table. Sanitize alone maps
+    // both '-' and '.' to '_', so entities "A-B" and "A.B" — both valid and distinct — would
+    // otherwise share #fathom_A_B and the second SELECT INTO would fail.
+    public static string TempTableName(EntityDefinition entity) =>
+        $"#fathom_{Sanitize(entity.Name)}_{StableHash(entity.Name):x16}";
 
     private static string Sanitize(string name) =>
         string.Concat(name.Select(c => char.IsLetterOrDigit(c) ? c : '_'));
+
+    /// <summary>
+    /// FNV-1a 64-bit. Deterministic across processes (unlike <see cref="string.GetHashCode()"/>,
+    /// which is randomized per run) so the name a parent's temp table is derived from matches
+    /// between the staging phase and the read phase.
+    /// </summary>
+    private static ulong StableHash(string value)
+    {
+        var hash = 14695981039346656037UL;
+        foreach (var c in value)
+        {
+            hash ^= c;
+            hash *= 1099511628211UL;
+        }
+
+        return hash;
+    }
 
     public static (string Sql, List<SqlParameter> Parameters) BuildStagingSql(
         EntityDefinition entity,
@@ -78,6 +100,32 @@ internal static class StagingSqlBuilder
                 """;
             return (sql, parameters);
         }
+    }
+
+    /// <summary>
+    /// The zero-staging read for a flat export (root with no children): one direct SELECT
+    /// against the source table, in the exact column shape the cursor expects (RowNumber,
+    /// ParentRowNumber, fields). Staging exists to give children a parent to correlate with —
+    /// with no children, a round trip through tempdb would be pure overhead, roughly doubling
+    /// the I/O of the export.
+    /// </summary>
+    public static (string Sql, List<SqlParameter> Parameters) BuildDirectSelectSql(
+        EntityDefinition entity,
+        IReadOnlyList<ResolvedFilter> filters)
+    {
+        var (whereSql, parameters) = BuildWhereClause(entity, filters, tableAlias: null);
+        var outputColumns = string.Join(",\n  ", entity.Fields.Select(f =>
+            $"{SqlIdentifier.Quote(f.ColumnName)} AS {SqlIdentifier.Quote(f.Name)}"));
+        var sql = $"""
+            SELECT
+              ROW_NUMBER() OVER (ORDER BY {SqlIdentifier.Quote(entity.KeyColumn)}) AS RowNumber,
+              CAST(0 AS bigint) AS ParentRowNumber,
+              {outputColumns}
+            FROM {entity.QualifiedTable}
+            {whereSql}
+            ORDER BY RowNumber;
+            """;
+        return (sql, parameters);
     }
 
     /// <summary>The final, merge-ordered read of one entity's staged rows — RowNumber and ParentRowNumber first, then fields in declaration order.</summary>

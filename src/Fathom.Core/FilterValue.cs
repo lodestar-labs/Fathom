@@ -8,6 +8,3 @@ namespace Fathom.Core;
 /// and none for <see cref="FilterOperator.IsNull"/> / <see cref="FilterOperator.IsNotNull"/>.
 /// </summary>
 public sealed record FilterValue(string Name, IReadOnlyList<string> Values);
-
-/// <summary>A request to run one export: which definition, which filter values, which output format.</summary>
-public sealed record ExportRequest(string DefinitionName, IReadOnlyList<FilterValue> Filters, string Format);

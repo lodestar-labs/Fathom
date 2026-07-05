@@ -16,6 +16,10 @@ public sealed class FilterValidationException(string message) : Exception(messag
 /// </summary>
 public sealed class FilterResolver(IEnumerable<IRequestLookupProvider> requestLookupProviders)
 {
+    // Comfortably under SQL Server's 2,100-parameter ceiling, leaving room for other filters'
+    // parameters on the same command.
+    private const int MaxInValues = 2000;
+
     private readonly Dictionary<string, IRequestLookupProvider> _providers =
         requestLookupProviders.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -55,6 +59,15 @@ public sealed class FilterResolver(IEnumerable<IRequestLookupProvider> requestLo
             if (value.Values.Count == 0)
             {
                 throw new FilterValidationException($"Filter '{filterDef.Name}' requires at least one value.");
+            }
+
+            // Each IN value binds one SqlParameter, and SQL Server caps a command at 2,100
+            // parameters. Reject an oversized list here as a clean client error rather than
+            // letting it surface as an opaque 500 from the driver mid-request.
+            if (filterDef.Operator == FilterOperator.In && value.Values.Count > MaxInValues)
+            {
+                throw new FilterValidationException(
+                    $"Filter '{filterDef.Name}' (in) accepts at most {MaxInValues} values; got {value.Values.Count}.");
             }
 
             var typedValues = new List<object>(value.Values.Count);

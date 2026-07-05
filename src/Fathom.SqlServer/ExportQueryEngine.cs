@@ -1,3 +1,4 @@
+using System.Data;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Fathom.Core;
@@ -15,6 +16,10 @@ namespace Fathom.SqlServer;
 /// row-numbered temp tables (parents first), then stream all levels back out through an
 /// N-way merge that reconstructs the tree — one root subtree in memory at a time, however
 /// deep or wide the hierarchy, however many rows the whole export contains.
+///
+/// Flat exports (a root with no children) skip staging entirely: staging exists to give
+/// child levels a stable parent row number to correlate with, so with no children the rows
+/// stream directly from the source table and never touch tempdb.
 /// </summary>
 public sealed class ExportQueryEngine(
     SqlConnectionFactory connectionFactory,
@@ -48,6 +53,8 @@ public sealed class ExportQueryEngine(
         FathomDiagnostics.ExportsStarted.Add(1, exportTag);
 
         SqlConnection? connection = null;
+        // Hoisted so the catch can dispose any cursors already opened when a later one fails.
+        var disposables = new List<ReaderCursor>();
         try
         {
             var resolvedFilters = await filterResolver.ResolveAsync(definition, requestFilters, cancellationToken);
@@ -55,33 +62,45 @@ public sealed class ExportQueryEngine(
             connection = await connectionFactory.OpenAsync(cancellationToken);
 
             var entities = definition.EnumerateEntities().ToArray();
-            foreach (var entity in entities)
-            {
-                var parent = definition.FindParent(entity);
-                var filtersForEntity = resolvedFilters
-                    .Where(f => string.Equals(f.Definition.Entity, entity.Name, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                var (sql, parameters) = StagingSqlBuilder.BuildStagingSql(entity, parent, filtersForEntity);
+            var cursors = new Dictionary<string, ILevelCursor>(StringComparer.OrdinalIgnoreCase);
 
-                await using var command = new SqlCommand(sql, connection) { CommandTimeout = _commandTimeoutSeconds };
-                command.Parameters.AddRange([.. parameters]);
-                await command.ExecuteNonQueryAsync(cancellationToken);
+            if (entities.Length == 1)
+            {
+                // Flat fast path: no children to correlate, so no staging — one direct,
+                // filtered SELECT against the source table.
+                var (sql, parameters) = StagingSqlBuilder.BuildDirectSelectSql(definition.Root, resolvedFilters);
+                var cursor = await OpenCursorAsync(connection, sql, parameters, definition.Root, cancellationToken);
+                cursors[definition.Root.Name] = cursor;
+                disposables.Add(cursor);
+                logger.LogDebug("Streaming flat export {Export} directly (no staging)", definition.Name);
+            }
+            else
+            {
+                foreach (var entity in entities)
+                {
+                    var parent = definition.FindParent(entity);
+                    var filtersForEntity = resolvedFilters
+                        .Where(f => string.Equals(f.Definition.Entity, entity.Name, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    var (sql, parameters) = StagingSqlBuilder.BuildStagingSql(entity, parent, filtersForEntity);
+
+                    await using var command = new SqlCommand(sql, connection) { CommandTimeout = _commandTimeoutSeconds };
+                    command.Parameters.AddRange([.. parameters]);
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                logger.LogDebug("Staged {EntityCount} entities for export {Export}", entities.Length, definition.Name);
+
+                foreach (var entity in entities)
+                {
+                    var sql = StagingSqlBuilder.BuildFinalSelectSql(entity);
+                    var cursor = await OpenCursorAsync(connection, sql, parameters: [], entity, cancellationToken);
+                    cursors[entity.Name] = cursor;
+                    disposables.Add(cursor);
+                }
             }
 
-            logger.LogDebug("Staged {EntityCount} entities for export {Export}", entities.Length, definition.Name);
-
-            var cursors = new Dictionary<string, ReaderCursor>(StringComparer.OrdinalIgnoreCase);
-            foreach (var entity in entities)
-            {
-                var sql = StagingSqlBuilder.BuildFinalSelectSql(entity);
-                var command = new SqlCommand(sql, connection) { CommandTimeout = _commandTimeoutSeconds };
-                var reader = await command.ExecuteReaderAsync(cancellationToken);
-                var cursor = new ReaderCursor(command, reader, entity);
-                await cursor.AdvanceAsync(cancellationToken);
-                cursors[entity.Name] = cursor;
-            }
-
-            return StreamAsync(connection, cursors, definition, activity, stopwatch, cancellationToken);
+            return StreamAsync(connection, cursors, disposables, definition, activity, stopwatch, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -89,6 +108,13 @@ public sealed class ExportQueryEngine(
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             RecordCompletion(definition.Name, outcome, stopwatch.Elapsed);
             activity?.Dispose();
+
+            // Dispose any readers/commands opened before the failure, then the connection.
+            foreach (var cursor in disposables)
+            {
+                await cursor.DisposeAsync();
+            }
+
             if (connection is not null)
             {
                 await connection.DisposeAsync();
@@ -98,15 +124,37 @@ public sealed class ExportQueryEngine(
         }
     }
 
+    private async Task<ReaderCursor> OpenCursorAsync(
+        SqlConnection connection,
+        string sql,
+        List<SqlParameter> parameters,
+        EntityDefinition entity,
+        CancellationToken cancellationToken)
+    {
+        var command = new SqlCommand(sql, connection) { CommandTimeout = _commandTimeoutSeconds };
+        if (parameters.Count > 0)
+        {
+            command.Parameters.AddRange([.. parameters]);
+        }
+
+        // SequentialAccess: the cursor reads columns strictly in ordinal order, so large
+        // text/binary columns stream through instead of being buffered whole per row.
+        var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
+        var cursor = new ReaderCursor(command, reader, entity);
+        await cursor.AdvanceAsync(cancellationToken);
+        return cursor;
+    }
+
     /// <summary>
-    /// The lazy half: streams roots from the already-staged cursors. Drives the merge's
+    /// The lazy half: streams roots from the already-opened cursors. Drives the merge's
     /// enumerator manually (rather than <c>await foreach</c>) so failures during enumeration
     /// can be caught and tagged before disposal — a <c>yield return</c> cannot appear inside a
     /// <c>try</c> block with a <c>catch</c>, so the catch lives around <c>MoveNextAsync</c> only.
     /// </summary>
     private async IAsyncEnumerable<ExportRow> StreamAsync(
         SqlConnection connection,
-        Dictionary<string, ReaderCursor> cursors,
+        Dictionary<string, ILevelCursor> cursors,
+        List<ReaderCursor> disposables,
         ExportDefinition definition,
         Activity? activity,
         Stopwatch stopwatch,
@@ -114,7 +162,8 @@ public sealed class ExportQueryEngine(
     {
         var rowCounts = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var outcome = "success";
-        var enumerator = ReadLevelAsync(definition.Root, parentRowNumber: 0, cursors, cancellationToken)
+        var enumerator = HierarchyMerger
+            .ReadLevelAsync(definition.Root, parentRowNumber: 0, cursors, ApplyExportLookupsAsync, cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
         try
         {
@@ -143,7 +192,7 @@ public sealed class ExportQueryEngine(
         finally
         {
             await enumerator.DisposeAsync();
-            foreach (var cursor in cursors.Values)
+            foreach (var cursor in disposables)
             {
                 await cursor.DisposeAsync();
             }
@@ -151,8 +200,10 @@ public sealed class ExportQueryEngine(
             await connection.DisposeAsync();
 
             activity?.SetTag("fathom.outcome", outcome);
+            long totalRows = 0;
             foreach (var (entityName, count) in rowCounts)
             {
+                totalRows += count;
                 FathomDiagnostics.RowsExported.Add(
                     count,
                     new KeyValuePair<string, object?>("fathom.export", definition.Name),
@@ -161,6 +212,10 @@ public sealed class ExportQueryEngine(
 
             RecordCompletion(definition.Name, outcome, stopwatch.Elapsed);
             activity?.Dispose();
+
+            logger.LogInformation(
+                "Export {Export} {Outcome}: {Rows} rows in {ElapsedMs} ms",
+                definition.Name, outcome, totalRows, (long)stopwatch.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -184,41 +239,6 @@ public sealed class ExportQueryEngine(
         FathomDiagnostics.ExportDuration.Record(elapsed.TotalSeconds, tags);
     }
 
-    /// <summary>
-    /// Yields every row of <paramref name="entity"/> whose staged ParentRowNumber matches
-    /// <paramref name="parentRowNumber"/>, recursing into each row's own children before
-    /// yielding it. Correct because every level was staged in
-    /// <c>ORDER BY (ParentRowNumber, RealKey)</c> order — the same relative order the parent
-    /// level is visited in — so a plain forward scan of each cursor is a valid merge join.
-    /// </summary>
-    private async IAsyncEnumerable<ExportRow> ReadLevelAsync(
-        EntityDefinition entity,
-        long parentRowNumber,
-        Dictionary<string, ReaderCursor> cursors,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        var cursor = cursors[entity.Name];
-        while (cursor.HasCurrent && cursor.CurrentParentRowNumber == parentRowNumber)
-        {
-            var rowNumber = cursor.CurrentRowNumber;
-            var rawValues = cursor.CurrentValues;
-            await cursor.AdvanceAsync(cancellationToken);
-
-            var values = await ApplyExportLookupsAsync(entity, rawValues, cancellationToken);
-            var row = new ExportRow { Entity = entity, RowNumber = rowNumber, Values = values };
-
-            foreach (var child in entity.Children)
-            {
-                await foreach (var childRow in ReadLevelAsync(child, rowNumber, cursors, cancellationToken))
-                {
-                    row.Children.Add(childRow);
-                }
-            }
-
-            yield return row;
-        }
-    }
-
     private async Task<IReadOnlyDictionary<string, object?>> ApplyExportLookupsAsync(
         EntityDefinition entity,
         IReadOnlyDictionary<string, object?> raw,
@@ -238,7 +258,7 @@ public sealed class ExportQueryEngine(
                     $"Field '{field.Name}' on entity '{entity.Name}' references unregistered export lookup provider '{lookupName}'.");
             }
 
-            var rawValue = FieldValueConverter.ToOutputString(raw[field.Name]);
+            var rawValue = FieldValueConverter.ToOutputString(field.Type, raw[field.Name]);
             if (rawValue is null)
             {
                 continue;

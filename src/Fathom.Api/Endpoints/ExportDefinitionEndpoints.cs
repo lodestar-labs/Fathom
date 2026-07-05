@@ -31,6 +31,7 @@ public static class ExportDefinitionEndpoints
                 HttpRequest request,
                 IExportDefinitionRegistry registry,
                 ExportDefinitionDirectoryStore store,
+                ILogger<ExportDefinitionDirectoryStore> logger,
                 CancellationToken cancellationToken) =>
             {
                 ExportDefinition definition;
@@ -48,21 +49,24 @@ public static class ExportDefinitionEndpoints
                     return Results.BadRequest(new { error = $"Export name '{definition.Name}' does not match the route ('{name}')." });
                 }
 
+                // Validate before touching disk: Register() runs ExportDefinition.Validate()
+                // and throws on the same structural errors DeserializeAsync can't catch.
+                var errors = definition.Validate();
+                if (errors.Count > 0)
+                {
+                    return Results.BadRequest(new { errors });
+                }
+
                 try
                 {
-                    // Validate before touching disk: Register() runs ExportDefinition.Validate()
-                    // and throws on the same structural errors DeserializeAsync can't catch.
-                    var errors = definition.Validate();
-                    if (errors.Count > 0)
-                    {
-                        return Results.BadRequest(new { errors });
-                    }
-
                     await store.SaveAsync(definition, cancellationToken);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    return Results.Problem($"The export definition could not be persisted: {ex.Message}", statusCode: 500);
+                    // Log the detail (which may include absolute paths) server-side; the caller
+                    // gets a generic message so the response can't disclose the storage layout.
+                    logger.LogError(ex, "Failed to persist export definition {Export}", definition.Name);
+                    return Results.Problem("The export definition could not be persisted.", statusCode: 500);
                 }
 
                 registry.Register(definition);

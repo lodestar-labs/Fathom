@@ -26,24 +26,19 @@ public sealed class XmlExportWriter : IExportWriter
             CloseOutput = false,
         };
 
-        var writer = XmlWriter.Create(destination, settings);
-        try
+        // Async disposal end to end: Kestrel's response body disallows synchronous writes by
+        // default, and a synchronous Close()/Dispose() here could flush synchronously.
+        await using var writer = XmlWriter.Create(destination, settings);
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync(null, definition.Name, null);
+        await foreach (var root in roots.WithCancellation(cancellationToken))
         {
-            await writer.WriteStartDocumentAsync();
-            await writer.WriteStartElementAsync(null, definition.Name, null);
-            await foreach (var root in roots.WithCancellation(cancellationToken))
-            {
-                await WriteRowAsync(writer, root, cancellationToken);
-            }
+            await WriteRowAsync(writer, root, cancellationToken);
+        }
 
-            await writer.WriteEndElementAsync();
-            await writer.WriteEndDocumentAsync();
-            await writer.FlushAsync();
-        }
-        finally
-        {
-            writer.Close();
-        }
+        await writer.WriteEndElementAsync();
+        await writer.WriteEndDocumentAsync();
+        await writer.FlushAsync();
     }
 
     private static async Task WriteRowAsync(XmlWriter writer, ExportRow row, CancellationToken cancellationToken)
@@ -51,7 +46,7 @@ public sealed class XmlExportWriter : IExportWriter
         await writer.WriteStartElementAsync(null, row.Entity.Name, null);
         foreach (var field in row.Entity.Fields)
         {
-            var text = FieldValueConverter.ToOutputString(row.Values.GetValueOrDefault(field.Name));
+            var text = FieldValueConverter.ToOutputString(field.Type, row.Values.GetValueOrDefault(field.Name));
             if (text is null)
             {
                 await writer.WriteStartElementAsync(null, field.Name, null);

@@ -17,7 +17,7 @@ public sealed class CsvExportWriter : IExportWriter
     public string Format => "csv";
 
     public string GetContentType(ExportDefinition definition) =>
-        definition.Root.Children.Count > 0 ? "application/zip" : "text/csv";
+        definition.Root.Children.Count > 0 ? "application/zip" : "text/csv; charset=utf-8";
 
     public async Task WriteAsync(
         Stream destination,
@@ -38,7 +38,8 @@ public sealed class CsvExportWriter : IExportWriter
     private static async Task WriteFlatAsync(
         Stream destination, EntityDefinition entity, IAsyncEnumerable<ExportRow> roots, CancellationToken cancellationToken)
     {
-        var writer = new StreamWriter(destination, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true);
+        await using var writer = new StreamWriter(
+            destination, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true);
         WriteHeader(writer, entity, includeKeys: false);
         await foreach (var row in roots.WithCancellation(cancellationToken))
         {
@@ -163,7 +164,7 @@ public sealed class CsvExportWriter : IExportWriter
         foreach (var field in entity.Fields)
         {
             WriteSeparator();
-            CsvField.Write(writer, FieldValueConverter.ToOutputString(row.Values.GetValueOrDefault(field.Name)));
+            CsvField.Write(writer, FieldValueConverter.ToOutputString(field.Type, row.Values.GetValueOrDefault(field.Name)));
         }
 
         writer.Write("\r\n");
