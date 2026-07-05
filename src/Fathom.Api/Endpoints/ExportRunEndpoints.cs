@@ -69,12 +69,22 @@ public static class ExportRunEndpoints
                 }
 
                 // `await using` guarantees the connection/readers are released even if the
-                // writer throws before it begins enumerating the rows.
+                // writer throws before it begins enumerating the rows. The catch tags the run
+                // as failed first, so the completion metric reflects the fault rather than a
+                // false success (DisposeAsync, running during unwind, can't see the exception).
                 await using (run)
                 {
-                    response.ContentType = writer.GetContentType(definition);
-                    response.Headers.ContentDisposition = $"attachment; filename=\"{name}.{FileExtension(writer, definition)}\"";
-                    await writer.WriteAsync(response.Body, definition, run.Rows, cancellationToken);
+                    try
+                    {
+                        response.ContentType = writer.GetContentType(definition);
+                        response.Headers.ContentDisposition = $"attachment; filename=\"{name}.{FileExtension(writer, definition)}\"";
+                        await writer.WriteAsync(response.Body, definition, run.Rows, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        run.MarkFailed(ex is OperationCanceledException);
+                        throw;
+                    }
                 }
 
                 return Results.Empty;

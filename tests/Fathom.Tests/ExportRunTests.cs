@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Fathom.Core;
 using Fathom.Core.Pipeline;
 using Fathom.SqlServer;
@@ -97,6 +98,53 @@ public class ExportRunTests
             Assert.That(count, Is.EqualTo(1));
             Assert.That(resources.DisposeCount, Is.EqualTo(1));
         });
+    }
+
+    [Test]
+    public async Task A_run_marked_failed_records_a_failed_completion_metric()
+    {
+        // Uniquely named so the listener isn't confused by any other run's completion metric.
+        const string exportName = "outcomemetrictest";
+        string? capturedOutcome = null;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == "Fathom" && instrument.Name == "fathom.exports.completed")
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            string? export = null, outcome = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "fathom.export") { export = tag.Value as string; }
+                else if (tag.Key == "fathom.outcome") { outcome = tag.Value as string; }
+            }
+
+            if (export == exportName) { capturedOutcome = outcome; }
+        });
+        listener.Start();
+
+        var definition = TestData.Orders();
+        definition.Root.Children.Clear();
+        definition.Name = exportName;
+        var run = new ExportRun(
+            new SpyResources(),
+            new Dictionary<string, ILevelCursor>(StringComparer.OrdinalIgnoreCase) { ["Order"] = new OneRowCursor(1) },
+            definition,
+            static (_, raw, _) => Task.FromResult(raw),
+            activity: null,
+            Stopwatch.StartNew(),
+            NullLogger.Instance);
+
+        run.MarkFailed(cancelled: false); // a writer threw before its first read
+        await run.DisposeAsync();
+
+        Assert.That(capturedOutcome, Is.EqualTo("error"), "a faulted export must not be tagged success");
     }
 
     [Test]

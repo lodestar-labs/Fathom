@@ -54,6 +54,21 @@ public sealed class ExportRun : IAsyncDisposable
     /// <summary>The reconstructed hierarchy, streamed one root subtree at a time. Enumerate at most once.</summary>
     public IAsyncEnumerable<ExportRow> Rows => ReadAsync();
 
+    /// <summary>
+    /// Records that consumption failed, so the completion metrics tagged in
+    /// <see cref="DisposeAsync"/> reflect the fault. A failure <em>during</em> enumeration is
+    /// already captured; this is for a consumer (e.g. a writer) that throws <em>before</em> its
+    /// first read, which <see cref="DisposeAsync"/> — run during exception unwind — can't
+    /// otherwise see. No-op once disposed.
+    /// </summary>
+    public void MarkFailed(bool cancelled)
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+        {
+            _outcome = cancelled ? "cancelled" : "error";
+        }
+    }
+
     private async IAsyncEnumerable<ExportRow> ReadAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         if (Interlocked.Exchange(ref _enumerated, 1) != 0)
