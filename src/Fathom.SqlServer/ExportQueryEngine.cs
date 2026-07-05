@@ -101,7 +101,8 @@ public sealed class ExportQueryEngine(
                 }
             }
 
-            return new ExportRun(connection, disposables, cursors, definition, ApplyExportLookupsAsync, activity, stopwatch, logger);
+            return new ExportRun(
+                new ExportResources(connection, disposables), cursors, definition, ApplyExportLookupsAsync, activity, stopwatch, logger);
         }
         catch (Exception ex)
         {

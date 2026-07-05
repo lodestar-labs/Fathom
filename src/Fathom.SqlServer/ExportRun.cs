@@ -3,26 +3,25 @@ using System.Runtime.CompilerServices;
 using Fathom.Core;
 using Fathom.Core.Pipeline;
 using Fathom.SqlServer.Diagnostics;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 
 namespace Fathom.SqlServer;
 
 /// <summary>
-/// A live export: the open connection, the staged temp tables, and one reader per level, plus
-/// the row stream that reads them back through the N-way merge.
+/// A live export: the open connection, the staged temp tables, and one reader per level
+/// (bundled behind an <see cref="IAsyncDisposable"/>), plus the row stream that reads them
+/// back through the N-way merge.
 ///
 /// Resource ownership is deliberately separated from enumeration. Disposing an
-/// <see cref="ExportRun"/> releases the connection, readers, and temp tables — and records
-/// completion metrics — exactly once, whether or not the caller ever enumerated
-/// <see cref="Rows"/>. Callers MUST dispose it (an <c>await using</c>). This is what makes a
-/// writer that throws <em>before</em> its first read (e.g. failing to open its temp files)
-/// safe: the pooled connection is still returned instead of leaking until finalization.
+/// <see cref="ExportRun"/> releases those resources — and records completion metrics — exactly
+/// once, whether or not the caller ever enumerated <see cref="Rows"/>. Callers MUST dispose it
+/// (an <c>await using</c>). This is what makes a writer that throws <em>before</em> its first
+/// read (e.g. failing to open its temp files) safe: the pooled connection is still returned
+/// instead of leaking until finalization.
 /// </summary>
 public sealed class ExportRun : IAsyncDisposable
 {
-    private readonly SqlConnection _connection;
-    private readonly IReadOnlyList<ReaderCursor> _cursors;
+    private readonly IAsyncDisposable _resources;
     private readonly IReadOnlyDictionary<string, ILevelCursor> _levels;
     private readonly ExportDefinition _definition;
     private readonly HierarchyMerger.ValueTransform _transform;
@@ -35,8 +34,7 @@ public sealed class ExportRun : IAsyncDisposable
     private int _disposed;
 
     internal ExportRun(
-        SqlConnection connection,
-        IReadOnlyList<ReaderCursor> cursors,
+        IAsyncDisposable resources,
         IReadOnlyDictionary<string, ILevelCursor> levels,
         ExportDefinition definition,
         HierarchyMerger.ValueTransform transform,
@@ -44,8 +42,7 @@ public sealed class ExportRun : IAsyncDisposable
         Stopwatch stopwatch,
         ILogger logger)
     {
-        _connection = connection;
-        _cursors = cursors;
+        _resources = resources;
         _levels = levels;
         _definition = definition;
         _transform = transform;
@@ -104,12 +101,8 @@ public sealed class ExportRun : IAsyncDisposable
             return;
         }
 
-        foreach (var cursor in _cursors)
-        {
-            await cursor.DisposeAsync();
-        }
-
-        await _connection.DisposeAsync();
+        // Release the connection + readers + temp tables regardless of whether Rows was read.
+        await _resources.DisposeAsync();
 
         _activity?.SetTag("fathom.outcome", _outcome);
         long totalRows = 0;
