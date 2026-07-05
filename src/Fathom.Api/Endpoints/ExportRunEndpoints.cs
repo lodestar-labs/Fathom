@@ -55,22 +55,28 @@ public static class ExportRunEndpoints
                     });
                 }
 
-                IAsyncEnumerable<ExportRow> rows;
+                ExportRun run;
                 try
                 {
                     // Filter resolution and staging happen eagerly here — before anything is
                     // written to the response — so a bad filter value surfaces as a clean 400
                     // instead of an aborted mid-stream response.
-                    rows = await engine.RunAsync(definition, bound.Filters, cancellationToken);
+                    run = await engine.RunAsync(definition, bound.Filters, cancellationToken);
                 }
                 catch (FilterValidationException ex)
                 {
                     return Results.BadRequest(new { error = ex.Message });
                 }
 
-                response.ContentType = writer.GetContentType(definition);
-                response.Headers.ContentDisposition = $"attachment; filename=\"{name}.{FileExtension(writer, definition)}\"";
-                await writer.WriteAsync(response.Body, definition, rows, cancellationToken);
+                // `await using` guarantees the connection/readers are released even if the
+                // writer throws before it begins enumerating the rows.
+                await using (run)
+                {
+                    response.ContentType = writer.GetContentType(definition);
+                    response.Headers.ContentDisposition = $"attachment; filename=\"{name}.{FileExtension(writer, definition)}\"";
+                    await writer.WriteAsync(response.Body, definition, run.Rows, cancellationToken);
+                }
+
                 return Results.Empty;
             })
             .WithName("RunExport")

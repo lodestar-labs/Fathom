@@ -55,7 +55,7 @@ public sealed class XmlExportWriter : IExportWriter
             }
             else
             {
-                await writer.WriteElementStringAsync(null, field.Name, null, text);
+                await writer.WriteElementStringAsync(null, field.Name, null, SanitizeXml(text));
             }
         }
 
@@ -67,4 +67,46 @@ public sealed class XmlExportWriter : IExportWriter
 
         await writer.WriteEndElementAsync();
     }
+
+    /// <summary>
+    /// Replaces characters that are legal in a SQL string but illegal in XML 1.0 (most C0
+    /// control chars — NUL, and everything below space except tab/CR/LF) with U+FFFD, the
+    /// replacement character. Without this a control byte in a <c>varchar</c> column would make
+    /// the writer throw <em>after</em> the 200 and part of the body had already been sent,
+    /// truncating the download into invalid XML. XML 1.0 has no way to represent these code
+    /// points at all — not even as numeric references — so substitution is the only option that
+    /// yields a well-formed document. Allocation-free on the common (clean) path.
+    /// </summary>
+    internal static string SanitizeXml(string text)
+    {
+        var clean = true;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (!IsLegalXml(rune.Value))
+            {
+                clean = false;
+                break;
+            }
+        }
+
+        if (clean)
+        {
+            return text;
+        }
+
+        var builder = new StringBuilder(text.Length);
+        foreach (var rune in text.EnumerateRunes())
+        {
+            builder.Append(IsLegalXml(rune.Value) ? rune.ToString() : "�");
+        }
+
+        return builder.ToString();
+    }
+
+    // The XML 1.0 Char production: tab, LF, CR, then #x20–#xD7FF, #xE000–#xFFFD, #x10000–#x10FFFF.
+    private static bool IsLegalXml(int codePoint) =>
+        codePoint is 0x9 or 0xA or 0xD
+        || codePoint is >= 0x20 and <= 0xD7FF
+        || codePoint is >= 0xE000 and <= 0xFFFD
+        || codePoint is >= 0x10000 and <= 0x10FFFF;
 }

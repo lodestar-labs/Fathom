@@ -97,6 +97,13 @@ parents whose children were all filtered away (they export with an empty child s
 Filters on the root narrow everything, since children are correlated to the exported
 parents.
 
+**Date bounds against `datetime` columns.** A `Date`-typed filter value is parsed to
+midnight, so a `lessThanOrEqual` "to" bound of `2026-06-10` compares as
+`<= 2026-06-10T00:00:00` and excludes rows on that day that carry a time component. If the
+underlying column is `datetime`/`datetime2` rather than `date`, express an inclusive upper
+bound as the next day with a strict operator, or add a day to the bound — Fathom parses the
+value as declared and can't see the column's storage type.
+
 ## Lookups
 
 Fathom resolves lookups in two independent directions, deliberately kept as two small

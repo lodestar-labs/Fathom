@@ -38,10 +38,11 @@ public sealed class ExportQueryEngine(
     /// <summary>
     /// Resolves filters and stages every level — the part that can fail on bad input (an
     /// unresolvable filter value, a SQL error) — eagerly, so callers see that failure as an
-    /// ordinary thrown exception before committing to a response. The returned sequence is
-    /// the lazy part: reading the already-staged levels back out through the merge.
+    /// ordinary thrown exception before committing to a response. The returned
+    /// <see cref="ExportRun"/> owns the connection and readers and MUST be disposed by the
+    /// caller (an <c>await using</c>); its <see cref="ExportRun.Rows"/> is the lazy part.
     /// </summary>
-    public async Task<IAsyncEnumerable<ExportRow>> RunAsync(
+    public async Task<ExportRun> RunAsync(
         ExportDefinition definition,
         IReadOnlyList<FilterValue> requestFilters,
         CancellationToken cancellationToken = default)
@@ -100,7 +101,7 @@ public sealed class ExportQueryEngine(
                 }
             }
 
-            return StreamAsync(connection, cursors, disposables, definition, activity, stopwatch, cancellationToken);
+            return new ExportRun(connection, disposables, cursors, definition, ApplyExportLookupsAsync, activity, stopwatch, logger);
         }
         catch (Exception ex)
         {
@@ -132,99 +133,35 @@ public sealed class ExportQueryEngine(
         CancellationToken cancellationToken)
     {
         var command = new SqlCommand(sql, connection) { CommandTimeout = _commandTimeoutSeconds };
-        if (parameters.Count > 0)
-        {
-            command.Parameters.AddRange([.. parameters]);
-        }
-
-        // SequentialAccess: the cursor reads columns strictly in ordinal order, so large
-        // text/binary columns stream through instead of being buffered whole per row.
-        var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
-        var cursor = new ReaderCursor(command, reader, entity);
-        await cursor.AdvanceAsync(cancellationToken);
-        return cursor;
-    }
-
-    /// <summary>
-    /// The lazy half: streams roots from the already-opened cursors. Drives the merge's
-    /// enumerator manually (rather than <c>await foreach</c>) so failures during enumeration
-    /// can be caught and tagged before disposal — a <c>yield return</c> cannot appear inside a
-    /// <c>try</c> block with a <c>catch</c>, so the catch lives around <c>MoveNextAsync</c> only.
-    /// </summary>
-    private async IAsyncEnumerable<ExportRow> StreamAsync(
-        SqlConnection connection,
-        Dictionary<string, ILevelCursor> cursors,
-        List<ReaderCursor> disposables,
-        ExportDefinition definition,
-        Activity? activity,
-        Stopwatch stopwatch,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        var rowCounts = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-        var outcome = "success";
-        var enumerator = HierarchyMerger
-            .ReadLevelAsync(definition.Root, parentRowNumber: 0, cursors, ApplyExportLookupsAsync, cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
+        ReaderCursor? cursor = null;
         try
         {
-            while (true)
+            if (parameters.Count > 0)
             {
-                ExportRow current;
-                try
-                {
-                    if (!await enumerator.MoveNextAsync())
-                    {
-                        break;
-                    }
-
-                    current = enumerator.Current;
-                }
-                catch (Exception ex)
-                {
-                    outcome = ex is OperationCanceledException ? "cancelled" : "error";
-                    throw;
-                }
-
-                CountRow(current, rowCounts);
-                yield return current;
+                command.Parameters.AddRange([.. parameters]);
             }
+
+            // SequentialAccess: the cursor reads columns strictly in ascending ordinal order,
+            // which keeps large text/binary columns from being buffered whole per row.
+            var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
+            cursor = new ReaderCursor(command, reader, entity);
+            await cursor.AdvanceAsync(cancellationToken);
+            return cursor;
         }
-        finally
+        catch
         {
-            await enumerator.DisposeAsync();
-            foreach (var cursor in disposables)
+            // A throw in ExecuteReaderAsync/AdvanceAsync would otherwise orphan this command
+            // (and its reader) — the caller only tracks cursors it has already received.
+            if (cursor is not null)
             {
                 await cursor.DisposeAsync();
             }
-
-            await connection.DisposeAsync();
-
-            activity?.SetTag("fathom.outcome", outcome);
-            long totalRows = 0;
-            foreach (var (entityName, count) in rowCounts)
+            else
             {
-                totalRows += count;
-                FathomDiagnostics.RowsExported.Add(
-                    count,
-                    new KeyValuePair<string, object?>("fathom.export", definition.Name),
-                    new KeyValuePair<string, object?>("fathom.entity", entityName));
+                await command.DisposeAsync();
             }
 
-            RecordCompletion(definition.Name, outcome, stopwatch.Elapsed);
-            activity?.Dispose();
-
-            logger.LogInformation(
-                "Export {Export} {Outcome}: {Rows} rows in {ElapsedMs} ms",
-                definition.Name, outcome, totalRows, (long)stopwatch.Elapsed.TotalMilliseconds);
-        }
-    }
-
-    private static void CountRow(ExportRow row, Dictionary<string, long> counts)
-    {
-        counts[row.Entity.Name] = counts.GetValueOrDefault(row.Entity.Name) + 1;
-        foreach (var child in row.Children)
-        {
-            CountRow(child, counts);
+            throw;
         }
     }
 
