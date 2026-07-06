@@ -60,6 +60,31 @@ public class FathomRegistrationTests
     }
 
     [Test]
+    public void Custom_provider_added_for_both_directions_is_one_shared_instance()
+    {
+        var services = BaseServices();
+        services.AddFathom().AddExportLookup<DualDirectionLookup>().AddRequestLookup<DualDirectionLookup>();
+
+        using var provider = services.BuildServiceProvider();
+        var exportLookup = provider.GetServices<IExportLookupProvider>().Single(p => p.Name == "dual");
+        var requestLookup = provider.GetServices<IRequestLookupProvider>().Single(p => p.Name == "dual");
+
+        Assert.That(exportLookup, Is.SameAs(requestLookup),
+            "a provider registered for both directions must share one instance (one cache, one warmup)");
+    }
+
+    private sealed class DualDirectionLookup : IExportLookupProvider, IRequestLookupProvider
+    {
+        public string Name => "dual";
+
+        ValueTask<string?> IExportLookupProvider.ResolveAsync(string rawValue, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<string?>(rawValue);
+
+        ValueTask<string> IRequestLookupProvider.ResolveAsync(string rawValue, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(rawValue);
+    }
+
+    [Test]
     public void AddFathom_registers_the_export_definition_registry()
     {
         var services = BaseServices();

@@ -78,13 +78,17 @@ internal static class StagingSqlBuilder
             var keyColumn = SqlIdentifier.Quote(entity.KeyColumn);
             var innerOutputColumns = string.Join(",\n      ", entity.Fields.Select(f =>
                 $"c.{SqlIdentifier.Quote(f.ColumnName)} AS {SqlIdentifier.Quote(f.Name)}"));
+            // The inner subquery has already renamed every source column to its field name, so
+            // the outer list must select by field name only — reusing outputColumns here would
+            // reference source column names that no longer exist inside `staged`.
+            var stagedColumns = string.Join(",\n  ", entity.Fields.Select(f => SqlIdentifier.Quote(f.Name)));
 
             var sql = $"""
                 SELECT
                   ROW_NUMBER() OVER (ORDER BY ParentRowNumber, RealKey) AS RowNumber,
                   ParentRowNumber,
                   RealKey,
-                  {outputColumns}
+                  {stagedColumns}
                 INTO {stageTable}
                 FROM
                 (

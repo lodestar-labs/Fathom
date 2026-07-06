@@ -52,6 +52,38 @@ public class StagingSqlBuilderTests
     }
 
     [Test]
+    public void Child_staging_selects_aliased_fields_by_their_output_name_in_the_outer_query()
+    {
+        // The inner subquery renames c.[ProductSku] to [Sku]; the outer SELECT INTO reads from
+        // that subquery, where only [Sku] exists. Selecting [ProductSku] there is SQL error 207.
+        var parent = new EntityDefinition
+        {
+            Name = "Order",
+            Table = "Orders",
+            KeyColumn = "OrderId",
+            Fields = [new FieldDefinition { Name = "OrderNumber" }],
+        };
+        var child = new EntityDefinition
+        {
+            Name = "Line",
+            Table = "OrderLines",
+            KeyColumn = "LineId",
+            ParentKeyColumn = "OrderId",
+            Fields = [new FieldDefinition { Name = "Sku", Column = "ProductSku" }],
+        };
+
+        var (sql, _) = StagingSqlBuilder.BuildStagingSql(child, parent, []);
+        var outerSelect = sql[..sql.IndexOf("INTO", StringComparison.Ordinal)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sql, Does.Contain("c.[ProductSku] AS [Sku]"), "inner subquery aliases the source column");
+            Assert.That(outerSelect, Does.Contain("[Sku]"), "outer select uses the aliased name");
+            Assert.That(outerSelect, Does.Not.Contain("ProductSku"), "outer select must not reference the source column");
+        });
+    }
+
+    [Test]
     public void Child_staging_joins_to_the_parents_staged_table_by_real_key()
     {
         var definition = TestData.Orders();

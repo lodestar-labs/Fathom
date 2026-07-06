@@ -12,7 +12,16 @@ public sealed class FathomInitializer(
     {
         foreach (var definition in await store.LoadAllAsync(cancellationToken))
         {
-            registry.Register(definition);
+            try
+            {
+                registry.Register(definition);
+            }
+            catch (ExportDefinitionException ex)
+            {
+                // One structurally invalid definition file must not take the host down with it —
+                // skip it, exactly as the store already skips files that fail to deserialize.
+                logger.LogError(ex, "Skipping invalid export definition '{Name}': {Message}", definition.Name, ex.Message);
+            }
         }
 
         logger.LogInformation(
