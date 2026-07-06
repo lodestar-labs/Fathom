@@ -150,6 +150,15 @@ files into `Fathom:DefinitionDirectory` and version them with your app. The full
 specification lives in
 [docs/export-definition-reference.md](docs/export-definition-reference.md).
 
+## Documentation
+
+| Document | Covers |
+| --- | --- |
+| [docs/index.html](docs/index.html) | Documentation home: what Fathom is, the format gallery, quick start. |
+| [docs/using-fathom.html](docs/using-fathom.html) | **Using & integrating**: the full HTTP API, token acquisition, configuration reference, worked output examples, integration patterns, the Loadstone round-trip, deployment, troubleshooting. |
+| [docs/architecture-overview.html](docs/architecture-overview.html) | How it works inside: the staging/row-numbering technique, the N-way merge, SQL safety layers, lookups, writers. |
+| [docs/export-definition-reference.md](docs/export-definition-reference.md) | The definition JSON schema, property by property. |
+
 ## Extending Fathom
 
 Both extension points are ordinary DI registrations:

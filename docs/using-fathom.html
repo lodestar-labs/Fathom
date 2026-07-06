@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Using Fathom — run it, call it, integrate it</title>
+<style>
+  :root {
+    --ink: #1a2332; --muted: #5a6a7e; --accent: #0f4c81; --accent-soft: #e8f0f8;
+    --good: #1a7f4e; --bad: #b3382c; --warn: #9a6700;
+    --code-bg: #f6f8fa; --border: #d7dee8; --card: #ffffff; --page: #f2f5f9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--page); line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 80px; }
+  header.hero { background: linear-gradient(135deg, #0f4c81 0%, #1a2332 100%); color: #fff; padding: 56px 24px 48px; }
+  .hero-inner { max-width: 960px; margin: 0 auto; }
+  .hero h1 { font-size: 2rem; font-weight: 700; letter-spacing: -.5px; }
+  .hero .sub { margin-top: 10px; font-size: 1.12rem; color: #c8d8ea; max-width: 50em; }
+  .hero .tag { display: inline-block; margin-bottom: 18px; padding: 4px 12px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: #cfe0f0; }
+  h2 { font-size: 1.5rem; color: var(--accent); margin: 52px 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--border); letter-spacing: -.3px; }
+  h3 { font-size: 1.1rem; margin: 26px 0 8px; color: var(--ink); }
+  p { margin: 10px 0; }
+  p.lead { font-size: 1.08rem; color: var(--muted); }
+  a { color: var(--accent); }
+  ul, ol { margin: 10px 0 10px 26px; }
+  li { margin: 4px 0; }
+  code { font-family: 'Cascadia Code', Consolas, monospace; font-size: .88em; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  pre { background: #10161f; color: #d5dde8; border-radius: 10px; padding: 18px 20px; overflow-x: auto; margin: 14px 0; font-size: .84rem; line-height: 1.55; }
+  pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+  pre .cm { color: #7a8a9d; } pre .kw { color: #7cb8ff; } pre .st { color: #e8b878; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; background: var(--card); border-radius: 8px; overflow: hidden; font-size: .92rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-size: .82rem; letter-spacing: .05em; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .method { font-weight: 700; font-family: Consolas, monospace; font-size: .85rem; }
+  .method.get { color: var(--good); } .method.put { color: var(--warn); } .method.del { color: var(--bad); }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; padding: 12px 18px; margin: 16px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3e0; }
+  .callout.win { border-color: var(--good); background: #e9f6ef; }
+  nav.toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 28px 0; }
+  nav.toc .panel-title { font-size: .78rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  nav.toc ol { counter-reset: toc; list-style: none; margin: 0; }
+  nav.toc li { counter-increment: toc; margin: 6px 0; }
+  nav.toc li::before { content: counter(toc) ". "; color: var(--accent); font-weight: 700; }
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: .88rem; }
+  .overflow { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <span class="tag">Fathom · Using &amp; integrating</span>
+    <h1>Using Fathom</h1>
+    <p class="sub">Everything between "I cloned the repo" and "my system calls Fathom in
+    production": running it, the full HTTP API, authentication, configuration, what the output
+    actually looks like, integration patterns, the Loadstone round-trip, and deployment.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="panel-title">On this page</div>
+  <ol>
+    <li>Run it locally</li>
+    <li>The workflow: define → register → run</li>
+    <li>The HTTP API, endpoint by endpoint</li>
+    <li>Authentication: getting a token</li>
+    <li>Configuration reference</li>
+    <li>What the output looks like</li>
+    <li>Integrating Fathom into your system</li>
+    <li>The Loadstone round-trip</li>
+    <li>Deployment</li>
+    <li>Troubleshooting</li>
+  </ol>
+</nav>
+
+<h2 id="run">1. Run it locally</h2>
+<pre><code>git clone https://github.com/lodestar-labs/Fathom.git
+cd Fathom
+docker compose up</code></pre>
+<p>Compose starts SQL Server, waits for it to be healthy, seeds the sample <code>Orders</code> /
+<code>OrderLines</code> tables, and starts Fathom on port 8080 with the
+<code>orders</code> sample export registered. Authentication is relaxed in the compose
+environment so you can explore; production requires a token (section 4).</p>
+<p>Three URLs to know:</p>
+<table>
+  <tr><td><code>http://localhost:8080/scalar</code></td><td>Interactive API browser — every endpoint, callable from the page.</td></tr>
+  <tr><td><code>http://localhost:8080/openapi/v1.json</code></td><td>The OpenAPI document, for generating clients.</td></tr>
+  <tr><td><code>http://localhost:8080/health/ready</code></td><td>Readiness (checks the database). <code>/health/live</code> is process-only.</td></tr>
+</table>
+
+<h2 id="workflow">2. The workflow: define → register → run</h2>
+<ol>
+  <li><strong>Define.</strong> Write an export definition — a JSON document naming a root entity
+  (table, key column, fields), optional child entities (with <code>parentKeyColumn</code>), and
+  the filters callers may use. The complete schema is in the
+  <a href="export-definition-reference.md">export definition reference</a>; the shipped sample is
+  <code>samples/orders/orders.export.json</code>.</li>
+  <li><strong>Register.</strong> Either <code>PUT</code> it to the API (it is validated, persisted
+  to the definition directory, and live immediately), or drop the <code>.json</code> file into the
+  definition directory and restart — both end up in the same place.</li>
+  <li><strong>Run.</strong> <code>GET /api/exports/{name}/run</code> with a <code>format</code>
+  and any filters. The response streams; save it or pipe it onward.</li>
+</ol>
+<pre><code><span class="cm"># register (or update) a definition</span>
+curl -X PUT http://localhost:8080/api/exports/orders \
+     -H "Content-Type: application/json" \
+     --data-binary @samples/orders/orders.export.json
+
+<span class="cm"># run it</span>
+curl -o orders.json "http://localhost:8080/api/exports/orders/run?format=json&amp;country=Denmark&amp;orderDateFrom=2026-01-01"</code></pre>
+
+<h2 id="api">3. The HTTP API, endpoint by endpoint</h2>
+<p>All five endpoints live under <code>/api/exports</code> and require authentication. Two error
+body shapes exist: most errors are <code>{ "error": "message" }</code>; a definition that parses
+but fails structural validation returns <code>{ "errors": ["...", "..."] }</code> (one entry per
+problem, so you can fix them all in one pass).</p>
+
+<div class="overflow">
+<table>
+  <tr><th>Endpoint</th><th>What it does</th><th>Responses</th></tr>
+  <tr>
+    <td><span class="method get">GET</span> <code>/api/exports</code></td>
+    <td>Lists every registered export: name, version, description, its entity names, and its
+    filters (name, entity, field, operator, required). This is the discovery call — a client that
+    wants to know "what can I ask for, and how can I filter it" reads this.</td>
+    <td><code>200</code> JSON array</td>
+  </tr>
+  <tr>
+    <td><span class="method get">GET</span> <code>/api/exports/{name}</code></td>
+    <td>Returns the full definition document as registered — the exact JSON you'd PUT.</td>
+    <td><code>200</code> the definition · <code>404</code> unknown name</td>
+  </tr>
+  <tr>
+    <td><span class="method put">PUT</span> <code>/api/exports/{name}</code></td>
+    <td>Registers or replaces a definition. The body's <code>name</code> must match the route.
+    Validated first, persisted to the definition directory, then made live — a definition that
+    fails validation changes nothing.</td>
+    <td><code>200</code> <code>{ name, entities }</code> · <code>400</code> <code>{ error }</code>
+    (unparseable / name mismatch) or <code>{ errors: [] }</code> (structural) · <code>500</code>
+    persist failure (registry untouched)</td>
+  </tr>
+  <tr>
+    <td><span class="method del">DELETE</span> <code>/api/exports/{name}</code></td>
+    <td>Unregisters the export and deletes its persisted file.</td>
+    <td><code>204</code> · <code>404</code> unknown name</td>
+  </tr>
+  <tr>
+    <td><span class="method get">GET</span> <code>/api/exports/{name}/run</code></td>
+    <td>Runs the export and streams the result. Query parameters: <code>format</code>
+    (<code>json</code> default, <code>xml</code>, <code>csv</code>) plus the definition's filters
+    by name. Filter binding is <strong>strict</strong>: an unrecognized query key is a
+    <code>400</code> naming the supported filters — a typo'd filter can never silently export the
+    whole table. Filter validation and staging happen <em>before</em> the response starts, so bad
+    input is a clean <code>400</code>, never a broken half-download. The response carries
+    <code>Content-Disposition: attachment</code> with a filename derived from the export name.</td>
+    <td><code>200</code> streamed body · <code>400</code> unknown format / unknown query key /
+    invalid filter value · <code>404</code> unknown name</td>
+  </tr>
+</table>
+</div>
+
+<div class="callout"><strong>OpenAPI note:</strong> because filters are defined per export at
+runtime, they can't appear as typed query parameters in the OpenAPI document for
+<code>/run</code>. Client generators get the endpoint but not the filter names — clients should
+read <code>GET /api/exports</code> (or <code>/api/exports/{name}</code>) to discover the
+available filters for an export.</div>
+
+<h2 id="auth">4. Authentication: getting a token</h2>
+<p>Fathom authenticates callers with Entra ID (Azure AD) bearer tokens. One-time setup in your
+tenant:</p>
+<ol>
+  <li><strong>App registration for Fathom itself</strong> (the API): App registrations → New
+  registration. Under <em>Expose an API</em>, set an Application ID URI (e.g.
+  <code>api://fathom</code>) and add a scope (e.g. <code>Export.Run</code>). Put this
+  registration's IDs into Fathom's configuration: <code>AzureAd:TenantId</code> (your tenant GUID
+  — a wildcard like <code>common</code> accepts tokens from <em>any</em> tenant and makes Fathom
+  log a startup warning) and <code>AzureAd:ClientId</code>.</li>
+  <li><strong>App registration for each caller</strong> (your service, a script): give it a
+  client secret or certificate, and grant it access to Fathom's scope (API permissions → Add →
+  your Fathom app).</li>
+</ol>
+<p>A service acquiring a token with the client-credentials flow:</p>
+<pre><code><span class="cm"># curl version (any language's MSAL library does the same thing)</span>
+curl -X POST "https://login.microsoftonline.com/&lt;tenant-id&gt;/oauth2/v2.0/token" \
+  -d "client_id=&lt;caller-client-id&gt;" \
+  -d "client_secret=&lt;caller-secret&gt;" \
+  -d "scope=api://fathom/.default" \
+  -d "grant_type=client_credentials"
+<span class="cm"># → { "access_token": "eyJ..." }</span>
+
+curl -H "Authorization: Bearer eyJ..." \
+     "https://your-fathom/api/exports/orders/run?format=csv"</code></pre>
+<pre><code><span class="cm">// .NET caller using Microsoft.Identity.Client</span>
+var app = ConfidentialClientApplicationBuilder.Create(callerClientId)
+    .WithClientSecret(secret)
+    .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
+    .Build();
+var token = await app.AcquireTokenForClient(["api://fathom/.default"]).ExecuteAsync();
+http.DefaultRequestHeaders.Authorization = new("Bearer", token.AccessToken);</code></pre>
+<div class="callout warn"><strong>Authorization is currently coarse:</strong> any authenticated
+caller can both run exports and author definitions. If those are different populations in your
+organization, put <code>PUT</code>/<code>DELETE /api/exports/*</code> behind a gateway policy or
+network rule until per-export authorization ships (it's top of the roadmap).</div>
+
+<h2 id="config">5. Configuration reference</h2>
+<p>Standard <code>IConfiguration</code> — <code>appsettings.json</code>, environment variables
+(<code>Fathom__ConnectionString</code> style), Key Vault, all work unchanged.</p>
+<div class="overflow">
+<table>
+  <tr><th>Key</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td><code>ConnectionStrings:Fathom</code> (or <code>Fathom:ConnectionString</code>)</td><td>—</td>
+      <td>The database exports read from. Use a least-privilege login: <code>db_datareader</code>
+      on exactly the tables/views you intend to expose — an authenticated caller can register a
+      definition against any table this login can read. Fathom forces MARS on
+      (<code>MultipleActiveResultSets=true</code>) — required by the level-merging read.</td></tr>
+  <tr><td><code>Fathom:DefinitionDirectory</code></td><td><code>data/exports</code></td>
+      <td>Where registered definitions persist as <code>{name}.json</code>. Must survive restarts
+      (a volume/persistent share); PUT and file-drop both land here. A file that fails to parse
+      or validate at startup is logged and skipped — it never blocks the host.</td></tr>
+  <tr><td><code>Fathom:ExportTimeout</code></td><td><code>00:30:00</code></td>
+      <td>Per-SQL-command timeout (TimeSpan format <code>hh:mm:ss</code>): bounds each staging
+      statement and the start of each level's read. It does <em>not</em> bound a client that
+      stalls mid-download (roadmap).</td></tr>
+  <tr><td><code>AzureAd:TenantId</code>, <code>AzureAd:ClientId</code></td><td>—</td>
+      <td>The Entra ID registration Fathom validates tokens against (section 4). Use your
+      specific tenant GUID.</td></tr>
+  <tr><td><code>OTEL_EXPORTER_OTLP_ENDPOINT</code></td><td>unset</td>
+      <td>Set it and traces/metrics flow to your collector; nothing else to configure. Span per
+      run (tagged name + outcome), counters for runs and rows per entity, duration histogram —
+      all under source/meter name <code>Fathom</code>.</td></tr>
+</table>
+</div>
+
+<h2 id="output">6. What the output looks like</h2>
+<p>For the shipped <code>orders</code> sample (an <code>Order</code> root with a
+<code>Line</code> child):</p>
+
+<h3>JSON — <code>?format=json</code></h3>
+<p>Roots stream as one array; each entity's children appear under a property named after the
+child entity. Declared <code>Date</code> fields render as dates, not midnight timestamps;
+database NULL is JSON <code>null</code>.</p>
+<pre><code>[
+  {
+    "OrderNumber": "ORD-1001",
+    "OrderDate": "2026-03-14",
+    "Country": "Denmark",
+    "Total": 1249.50,
+    "Line": [
+      { "LineNumber": 1, "Sku": "WIDGET-A", "Quantity": 3 },
+      { "LineNumber": 2, "Sku": "WIDGET-B", "Quantity": 1 }
+    ]
+  }
+]</code></pre>
+
+<h3>XML — <code>?format=xml</code></h3>
+<p>The document element is the export's name; each row is an element named after its entity;
+fields are child elements. Database NULL renders as an empty element marked
+<code>nil="true"</code>.</p>
+<pre><code>&lt;orders&gt;
+  &lt;Order&gt;
+    &lt;OrderNumber&gt;ORD-1001&lt;/OrderNumber&gt;
+    &lt;OrderDate&gt;2026-03-14&lt;/OrderDate&gt;
+    &lt;Country&gt;Denmark&lt;/Country&gt;
+    &lt;Total&gt;1249.50&lt;/Total&gt;
+    &lt;Line&gt;
+      &lt;LineNumber&gt;1&lt;/LineNumber&gt;
+      &lt;Sku&gt;WIDGET-A&lt;/Sku&gt;
+      &lt;Quantity&gt;3&lt;/Quantity&gt;
+    &lt;/Line&gt;
+  &lt;/Order&gt;
+&lt;/orders&gt;</code></pre>
+
+<h3>CSV — <code>?format=csv</code></h3>
+<p>A flat export (no children) is a single <code>text/csv</code> file. A hierarchical export is a
+<strong>zip</strong> (<code>application/zip</code>) with one <code>{Entity}.csv</code> per
+entity. Every row carries a <code>_key</code> column; every non-root row also carries
+<code>_parentKey</code>, referencing its parent's <code>_key</code> — which is how the hierarchy
+survives a flat format:</p>
+<pre><code><span class="cm"># Order.csv</span>
+_key,OrderNumber,OrderDate,Country,Total
+1,ORD-1001,2026-03-14,Denmark,1249.50
+
+<span class="cm"># Line.csv</span>
+_key,_parentKey,LineNumber,Sku,Quantity
+1,1,1,WIDGET-A,3
+2,1,2,WIDGET-B,1</code></pre>
+<div class="callout warn">CSV cells are exported <em>faithfully</em> — a value beginning with
+<code>=</code>, <code>+</code>, <code>-</code>, or <code>@</code> is not prefixed or escaped.
+That keeps the data exact and round-trippable, but a spreadsheet application may interpret such a
+cell as a formula. If your source data is user-controlled, treat exported CSV as untrusted input
+in Excel or post-process it.</div>
+
+<h2 id="integrate">7. Integrating Fathom into your system</h2>
+<p>Three patterns cover most uses:</p>
+
+<h3>7.1 Your service calls Fathom on demand</h3>
+<p>Your backend needs data from the operational database in a defined shape — a report, a partner
+feed, a data handoff. Instead of writing and maintaining that query + serialization code, register
+a definition once and stream the endpoint:</p>
+<pre><code><span class="cm">// any HTTP client; the response streams, so stream it onward — don't buffer</span>
+using var response = await http.GetAsync(
+    "https://fathom.internal/api/exports/orders/run?format=json&amp;country=Denmark",
+    HttpCompletionOption.ResponseHeadersRead);   <span class="cm">// ← headers-first: no buffering</span>
+response.EnsureSuccessStatusCode();
+await using var stream = await response.Content.ReadAsStreamAsync();
+<span class="cm">// deserialize incrementally, forward to a file/blob, or pipe to your own response</span></code></pre>
+<p><code>ResponseHeadersRead</code> is the one thing to remember: it makes your client hand you
+the stream as it arrives instead of buffering the whole export first — which preserves, end to
+end, the memory behavior Fathom guarantees on its side.</p>
+
+<h3>7.2 Scheduled feeds</h3>
+<p>A nightly partner file is a cron job (or Azure Function timer, or CI schedule) with one
+<code>curl</code>: acquire a token (section 4), <code>GET /run</code>, drop the output on the
+destination (SFTP, blob storage, mail). The definition is the contract; changing the feed's shape
+is a <code>PUT</code>, not a deployment.</p>
+
+<h3>7.3 Behind your own API</h3>
+<p>When external callers shouldn't talk to Fathom directly, proxy it: your endpoint applies its
+own authorization, then forwards to Fathom and streams the response through. Keep the proxy
+streaming (no buffering middleware) and pass through <code>Content-Type</code> and
+<code>Content-Disposition</code>.</p>
+
+<div class="callout"><strong>Client checklist:</strong> discover filters via
+<code>GET /api/exports</code> rather than hardcoding · treat any <code>400</code> body's
+<code>error</code> text as actionable (it names unknown keys and supported filters) · expect
+<code>Content-Type</code> to vary by format (<code>application/json</code>,
+<code>application/xml</code>, <code>text/csv</code> or <code>application/zip</code>) · stream,
+don't buffer.</div>
+
+<h2 id="loadstone">8. The Loadstone round-trip</h2>
+<p>Fathom's hierarchical CSV convention is <em>by design</em> the same one
+<a href="https://github.com/lodestar-labs/Loadstone">Loadstone</a>'s hierarchical CSV import
+reads: a zip of <code>{Entity}.csv</code> files, rows keyed by <code>_key</code>, children
+pointing at parents through <code>_parentKey</code>. That makes database-to-database transfer a
+two-step pipeline with no transformation in between:</p>
+<pre><code><span class="cm"># 1. Export a hierarchy from database A</span>
+curl -H "Authorization: Bearer $TOKEN_A" -o orders.zip \
+  "https://fathom-a.internal/api/exports/orders/run?format=csv&amp;orderDateFrom=2026-01-01"
+
+<span class="cm"># 2. Import it into database B (Loadstone: upload against a matching manifest)</span>
+curl -H "Authorization: Bearer $TOKEN_B" \
+  -F "file=@orders.zip" \
+  "https://loadstone-b.internal/api/datasets/orders/files"</code></pre>
+<p>The two sides meet in the middle: Fathom's export definition and Loadstone's dataset manifest
+each describe their own database's shape, and the zip's entity files + key columns are the shared
+contract. JSON round-trips the same way — Fathom nests children under a property named after the
+child entity, which is the shape Loadstone's JSON import expects. The fine detail of the import
+side (manifest authoring, job tracking, dead-lettering) is in Loadstone's
+<a href="https://github.com/lodestar-labs/Loadstone/blob/main/docs/validate-and-import-guide.md">validate &amp; import guide</a>.</p>
+
+<h2 id="deploy">9. Deployment</h2>
+<h3>Containers</h3>
+<p>The repo's <code>Dockerfile</code> builds the API image; <code>docker-compose.yml</code> shows
+the reference wiring (SQL Server health-gated before Fathom starts). For Kubernetes or any
+orchestrator, the two probes are the integration points:</p>
+<table>
+  <tr><td><code>/health/live</code></td><td>Liveness. Process-only — deliberately independent of
+  the database, so a database blip pulls replicas from rotation (readiness) instead of restart-looping
+  them.</td></tr>
+  <tr><td><code>/health/ready</code></td><td>Readiness. Checks database reachability (cached a few
+  seconds and single-flighted, so probes can't exhaust the connection pool).</td></tr>
+</table>
+<p>Give <code>Fathom:DefinitionDirectory</code> a persistent volume, or treat definitions as
+config and <code>PUT</code> them from your pipeline on deploy — both are supported; pick one as
+the source of truth.</p>
+<h3>Azure App Service</h3>
+<p>The README's <a href="https://github.com/lodestar-labs/Fathom#running-on-azure">Running on
+Azure</a> section is the authoritative sequence: Entra app registration → App Service from the
+Dockerfile → <code>ConnectionStrings__Fathom</code> (Key Vault reference) +
+<code>AzureAd__TenantId</code>/<code>ClientId</code> → optional OTLP endpoint for Application
+Insights. No code changes.</p>
+<h3>Sizing, honestly</h3>
+<p>Exports stream end to end — one root subtree in memory at a time regardless of row count. The
+single exception: hierarchical <strong>CSV</strong> exports buffer each entity to a temp file
+before zipping (a zip can only write one entry at a time), so budget bounded temp <em>disk</em>
+for those. CPU and memory otherwise stay flat as exports grow; the database does the heavy
+lifting.</p>
+
+<h2 id="troubleshooting">10. Troubleshooting</h2>
+<div class="overflow">
+<table>
+  <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  <tr><td><code>401</code> on every <code>/api</code> call</td><td>Missing/invalid bearer token, or token issued for a different audience</td><td>Section 4; verify the token's <code>aud</code> matches Fathom's app registration and the scope is <code>api://…/.default</code></td></tr>
+  <tr><td><code>400 Unknown query parameter(s): …</code></td><td>Typo'd filter name (binding is strict on purpose)</td><td>The error lists the supported filters; or read <code>GET /api/exports</code></td></tr>
+  <tr><td><code>400 Unknown format '…'</code></td><td><code>format</code> isn't <code>json</code>/<code>xml</code>/<code>csv</code></td><td>The error lists what's supported</td></tr>
+  <tr><td><code>400</code> naming a filter and value</td><td>Value doesn't parse as the filter's declared type, wrong value count (e.g. <code>Between</code> needs two), or a request lookup couldn't resolve it</td><td>Fix the value; for lookups, the readable form must exist in the code list</td></tr>
+  <tr><td><code>404</code> on <code>/run</code></td><td>Export name not registered</td><td><code>GET /api/exports</code> to see what is; PUT the definition</td></tr>
+  <tr><td>PUT returns <code>{ "errors": [...] }</code></td><td>Definition parsed but failed structural validation (missing key column, duplicate entity, reserved field name…)</td><td>Every entry is one problem; fix all, re-PUT — nothing was changed on the server</td></tr>
+  <tr><td>Definition file in the directory but export missing after restart</td><td>File failed to parse or validate at startup — it is logged and skipped, never fatal</td><td>Check startup logs for "Skipping invalid export definition"</td></tr>
+  <tr><td>Export hangs then fails around 30 minutes</td><td>A staging statement hit <code>Fathom:ExportTimeout</code></td><td>Raise the timeout, or add/require filters and indexes so staging is selective</td></tr>
+  <tr><td>Readiness probe red, liveness green</td><td>Database unreachable — by design replicas leave rotation rather than restart</td><td>Fix connectivity; traffic resumes automatically</td></tr>
+</table>
+</div>
+
+<div class="foot">
+Fathom · <a href="index.html">documentation home</a> ·
+<a href="https://github.com/lodestar-labs/Fathom">github.com/lodestar-labs/Fathom</a>
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fathom — declarative data export for SQL Server</title>
+<style>
+  :root {
+    --ink: #1a2332; --muted: #5a6a7e; --accent: #0f4c81; --accent-soft: #e8f0f8;
+    --good: #1a7f4e; --bad: #b3382c; --warn: #9a6700;
+    --code-bg: #f6f8fa; --border: #d7dee8; --card: #ffffff; --page: #f2f5f9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--page); line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 80px; }
+  header.hero { background: linear-gradient(135deg, #0f4c81 0%, #1a2332 100%); color: #fff; padding: 56px 24px 48px; }
+  .hero-inner { max-width: 960px; margin: 0 auto; }
+  .hero h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: -.5px; }
+  .hero .sub { margin-top: 10px; font-size: 1.15rem; color: #c8d8ea; max-width: 48em; }
+  .hero .tag { display: inline-block; margin-bottom: 18px; padding: 4px 12px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: #cfe0f0; }
+  h2 { font-size: 1.5rem; color: var(--accent); margin: 52px 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--border); letter-spacing: -.3px; }
+  h3 { font-size: 1.1rem; margin: 26px 0 8px; color: var(--ink); }
+  p { margin: 10px 0; }
+  p.lead { font-size: 1.08rem; color: var(--muted); }
+  a { color: var(--accent); }
+  ul, ol { margin: 10px 0 10px 26px; }
+  li { margin: 4px 0; }
+  code { font-family: 'Cascadia Code', Consolas, monospace; font-size: .88em; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  pre { background: #10161f; color: #d5dde8; border-radius: 10px; padding: 18px 20px; overflow-x: auto; margin: 14px 0; font-size: .84rem; line-height: 1.55; }
+  pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+  pre .cm { color: #7a8a9d; } pre .kw { color: #7cb8ff; } pre .st { color: #e8b878; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .panel-title { font-size: .78rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px; color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; background: var(--card); border-radius: 8px; overflow: hidden; font-size: .92rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-size: .82rem; letter-spacing: .05em; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; padding: 12px 18px; margin: 16px 0; }
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: .88rem; }
+  .overflow { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <span class="tag">Fathom · Documentation</span>
+    <h1>Export data of any shape out of a relational database — declaratively</h1>
+    <p class="sub">Describe an export once in a small JSON definition — entities, fields, hierarchy,
+    filters, code lookups — and Fathom streams it out of SQL Server as JSON, XML, or CSV, however
+    deep the nesting, without a line of export code.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+<h2>What Fathom does</h2>
+<p class="lead">Every system that imports data eventually has to give it back: a partner wants
+XML, an analyst wants CSV, another service wants JSON. Fathom is the one export pipeline for all
+of those.</p>
+<p>You register an <strong>export definition</strong> — a JSON document describing a root entity,
+its child entities, which columns become which output fields, and which filters callers may use.
+From then on, the export is a single HTTP call:</p>
+<pre><code>GET /api/exports/orders/run?format=xml&amp;country=Denmark&amp;orderDateFrom=2026-01-01</code></pre>
+<p>Fathom validates the filters, stages the data level by level, and <strong>streams</strong> the
+response — it never buffers the whole export in memory, so a ten-million-row export costs the same
+memory as a ten-row one. Reference-data codes (a numeric country or species code) are rendered as
+readable strings on the way out through pluggable <strong>lookups</strong>, and the same lookups
+work in reverse so callers can filter by the readable value.</p>
+
+<div class="grid3">
+  <div class="card"><div class="panel-title">JSON</div><p style="font-size:.9rem">Roots as an
+  array; each entity's children nested under a property named after the child entity.</p></div>
+  <div class="card"><div class="panel-title">XML</div><p style="font-size:.9rem">One element per
+  entity, fields as child elements, database NULL as <code>nil="true"</code>.</p></div>
+  <div class="card"><div class="panel-title">CSV</div><p style="font-size:.9rem">One file per
+  entity in a zip; rows carry <code>_key</code> / <code>_parentKey</code> so the hierarchy can be
+  rebuilt — or re-imported by Loadstone.</p></div>
+</div>
+
+<h2>Documentation map</h2>
+<div class="overflow">
+<table>
+  <tr><th>Document</th><th>Read it when you want to…</th></tr>
+  <tr><td><a href="using-fathom.html"><strong>Using Fathom</strong></a></td>
+      <td>Run it, call the API, configure it, integrate it into your own system, deploy it, chain
+      it with Loadstone. Includes worked output examples and a troubleshooting table. <strong>Start
+      here.</strong></td></tr>
+  <tr><td><a href="architecture-overview.html">Architecture overview</a></td>
+      <td>Understand how it works inside: the definition registry, the staging/merge query engine,
+      writers, lookups — and why it streams.</td></tr>
+  <tr><td><a href="export-definition-reference.md">Export definition reference</a></td>
+      <td>Author definitions: every property of the JSON schema — entities, fields, types,
+      filters, operators, lookups.</td></tr>
+  <tr><td><a href="https://github.com/lodestar-labs/Fathom">README</a></td>
+      <td>Project overview, quick start, security model, roadmap.</td></tr>
+</table>
+</div>
+
+<h2>Quick start</h2>
+<pre><code><span class="cm"># 1. Run it (SQL Server + Fathom, seeded with the orders sample)</span>
+git clone https://github.com/lodestar-labs/Fathom.git
+cd Fathom
+docker compose up
+
+<span class="cm"># 2. See what's registered</span>
+curl http://localhost:8080/api/exports
+
+<span class="cm"># 3. Run an export</span>
+curl "http://localhost:8080/api/exports/orders/run?format=json&amp;country=Denmark"</code></pre>
+<p>From zero to a filtered, hierarchical, streamed export in three commands. The
+<a href="using-fathom.html">Using Fathom</a> guide continues from here.</p>
+
+<h2>Fathom and Loadstone</h2>
+<div class="callout">
+Fathom is the conceptual inverse of <a href="https://github.com/lodestar-labs/Loadstone">Loadstone</a>:
+Loadstone imports data of any shape <em>into</em> a relational database from a declarative
+manifest; Fathom exports it back <em>out</em> from a declarative definition. They share design
+DNA — API-first, streaming, declarative JSON at the boundary — and Fathom's hierarchical CSV
+output (<code>_key</code>/<code>_parentKey</code>) is designed so a Fathom export can be fed
+straight back through a Loadstone import. The round-trip is worked end-to-end in
+<a href="using-fathom.html#loadstone">Using Fathom §8</a>.
+</div>
+
+<div class="foot">
+Fathom · BSL-licensed (free for non-production use) ·
+<a href="https://github.com/lodestar-labs/Fathom">github.com/lodestar-labs/Fathom</a>
+</div>
+
+</div>
+</body>
+</html>

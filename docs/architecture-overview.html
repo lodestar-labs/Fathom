@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fathom — architecture overview</title>
+<style>
+  :root {
+    --ink: #1a2332; --muted: #5a6a7e; --accent: #0f4c81; --accent-soft: #e8f0f8;
+    --good: #1a7f4e; --bad: #b3382c; --warn: #9a6700;
+    --code-bg: #f6f8fa; --border: #d7dee8; --card: #ffffff; --page: #f2f5f9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--page); line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 80px; }
+  header.hero { background: linear-gradient(135deg, #0f4c81 0%, #1a2332 100%); color: #fff; padding: 56px 24px 48px; }
+  .hero-inner { max-width: 960px; margin: 0 auto; }
+  .hero h1 { font-size: 2rem; font-weight: 700; letter-spacing: -.5px; }
+  .hero .sub { margin-top: 10px; font-size: 1.12rem; color: #c8d8ea; max-width: 50em; }
+  .hero .tag { display: inline-block; margin-bottom: 18px; padding: 4px 12px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: #cfe0f0; }
+  h2 { font-size: 1.5rem; color: var(--accent); margin: 52px 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--border); letter-spacing: -.3px; }
+  h3 { font-size: 1.1rem; margin: 26px 0 8px; color: var(--ink); }
+  p { margin: 10px 0; }
+  p.lead { font-size: 1.08rem; color: var(--muted); }
+  a { color: var(--accent); }
+  ul, ol { margin: 10px 0 10px 26px; }
+  li { margin: 4px 0; }
+  code { font-family: 'Cascadia Code', Consolas, monospace; font-size: .88em; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  pre { background: #10161f; color: #d5dde8; border-radius: 10px; padding: 18px 20px; overflow-x: auto; margin: 14px 0; font-size: .84rem; line-height: 1.55; }
+  pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+  pre .cm { color: #7a8a9d; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; background: var(--card); border-radius: 8px; overflow: hidden; font-size: .92rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-size: .82rem; letter-spacing: .05em; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; padding: 12px 18px; margin: 16px 0; }
+  .callout.win { border-color: var(--good); background: #e9f6ef; }
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: .88rem; }
+  .overflow { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <span class="tag">Fathom · Architecture</span>
+    <h1>How Fathom works inside</h1>
+    <p class="sub">The pipeline an export request travels — registry, filter resolution, the
+    staged row-numbering trick that makes hierarchies streamable, the N-way merge, and the
+    writers — and the reasoning behind each choice.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+<h2>The four projects</h2>
+<div class="overflow">
+<table>
+  <tr><th>Project</th><th>Role</th><th>Depends on</th></tr>
+  <tr><td><code>Fathom.Core</code></td><td>Contracts: the export-definition model and its validation, the definition registry and directory store, the dual lookup-provider interfaces, the writer interface.</td><td>nothing</td></tr>
+  <tr><td><code>Fathom.SqlServer</code></td><td>The query engine: SQL generation (staging + reads), filter resolution, the export run lifecycle, the built-in code-list lookup, health check.</td><td>Core</td></tr>
+  <tr><td><code>Fathom.Writers</code></td><td>Streaming CSV, JSON, and XML writers over the engine's row stream.</td><td>Core</td></tr>
+  <tr><td><code>Fathom.Api</code></td><td>The HTTP host: endpoints, Entra ID auth, OpenAPI/Scalar, Serilog, OpenTelemetry, health probes, startup definition loading.</td><td>all three</td></tr>
+</table>
+</div>
+<p>The dependency arrows only point inward at <code>Core</code> — the engine and the writers
+never reference each other; they meet at <code>Core</code>'s row-stream and writer contracts.
+That's what makes a future PostgreSQL provider (roadmap) a new project rather than a rewrite:
+the writers and the host wouldn't change.</p>
+
+<h2>Life of an export request</h2>
+<pre><code>GET /api/exports/orders/run?format=csv&amp;country=Denmark
+        │
+        ▼
+ 1. Registry lookup ──── unknown name → 404
+        │
+ 2. Format resolution ── unknown format → 400 (lists supported)
+        │
+ 3. Strict filter binding ── unknown query key → 400 (lists supported filters)
+        │
+ 4. Filter resolution ── request lookups translate readable values
+        │                (Denmark → 208); bad value → 400
+        ▼
+ 5. Staging (per level, root first) ── SELECT … INTO #temp, parameterized
+        │
+ 6. Streamed read ── one reader per level, N-way merge by row number
+        ▼
+ 7. Writer ── CSV / JSON / XML, straight onto the HTTP response
+</code></pre>
+<p>Steps 1–5 all happen <strong>before the first response byte</strong>. That ordering is a
+deliberate contract: every way a request can be wrong produces a clean status code and error
+body; once streaming starts, the request has already proven executable.</p>
+
+<h2>The staging trick — why hierarchies stream</h2>
+<p>The hard problem in hierarchical export is recombination: rows for <code>Order</code> and
+rows for <code>Line</code> come from different tables, but the output needs each order's lines
+nested inside it. The classic answers both hurt — a giant <code>JOIN</code> duplicates every
+parent field onto every child row; loading everything and grouping in memory dies on large
+exports.</p>
+<p>Fathom's answer: <strong>stage each level once, with synthetic row numbers, and merge
+forward-only.</strong></p>
+<ol>
+  <li><strong>Root staging.</strong> The filtered root rows go into a session-scoped temp table,
+  each assigned <code>ROW_NUMBER() OVER (ORDER BY key)</code> — a dense 1..N numbering — plus
+  their real key.</li>
+  <li><strong>Child staging.</strong> Each child level joins its source table to the
+  <em>parent's temp table</em> on the real foreign key, but stores the parent's
+  <em>row number</em> as its correlation, then numbers itself
+  <code>ORDER BY (ParentRowNumber, RealKey)</code>. Recursively, level by level.</li>
+  <li><strong>Merged read.</strong> Every level is then read back <em>simultaneously</em> (one
+  reader per level — this is why the connection needs MARS), each ordered by its numbering. A
+  forward-only merge walks the root reader, and for each root row pulls exactly the child rows
+  whose <code>ParentRowNumber</code> matches. No join explosion, no lookahead, no buffering
+  beyond the current root subtree.</li>
+</ol>
+<div class="callout win">
+Two side benefits fall out. <strong>Real keys never leak:</strong> correlation runs on synthetic
+numbers, so primary/foreign key values don't appear in output unless a definition maps them as
+ordinary fields. <strong>Filters compose naturally:</strong> a child-level filter simply narrows
+that level's staging query — parents without surviving children still export (they exist), and
+children of filtered-out parents never stage (the join can't reach them).
+</div>
+<p>Flat exports (a root with no children) skip staging entirely — one direct
+<code>SELECT</code> with the same row-numbered shape, because a tempdb round trip would roughly
+double the I/O for no benefit.</p>
+
+<h2>SQL safety, in layers</h2>
+<ul>
+  <li><strong>Values:</strong> every filter value becomes a <code>SqlParameter</code> — no value
+  is ever concatenated into SQL.</li>
+  <li><strong>Identifiers:</strong> schema/table/column names come only from a registered
+  definition, are bracket-quoted with <code>]</code>-doubling, and are validated at registration
+  (length, control characters). A hostile identifier can't be registered, and even a strange
+  legitimate one can't break quoting.</li>
+  <li><strong>Temp table names:</strong> derived from the entity name by sanitizing to
+  <code>[A-Za-z0-9_]</code> <em>plus a deterministic FNV-1a hash of the original name</em> — so
+  two distinct entity names that sanitize identically (<code>A-B</code> vs <code>A.B</code>) can
+  never collide on the same temp table.</li>
+  <li><strong>Least privilege as the outer wall:</strong> the engine only ever issues
+  <code>SELECT</code> and <code>SELECT INTO #temp</code>; run it on a login with
+  <code>db_datareader</code> over exactly the exposable tables.</li>
+</ul>
+
+<h2>Lookups — the two directions</h2>
+<p>Reference data usually lives as codes (<code>208</code>) but should export as words
+(<code>Denmark</code>). Two small interfaces handle both directions of that translation:</p>
+<table>
+  <tr><th>Interface</th><th>Direction</th><th>Used when</th></tr>
+  <tr><td><code>IExportLookupProvider</code></td><td>database value → output string</td><td>A field declares <code>"lookup": "countries"</code>; called per (field, row) on the hot path — implementations cache.</td></tr>
+  <tr><td><code>IRequestLookupProvider</code></td><td>client value → database value</td><td>A filter declares <code>"requestLookup": "countries"</code>; the caller sends <code>?country=Denmark</code>, the engine binds <code>208</code>.</td></tr>
+</table>
+<p>The built-in <code>AddCodeListLookup(name, codeType)</code> serves both interfaces from one
+cached, database-backed instance. Custom providers (an external API, a static dictionary)
+implement one or both interfaces and register with <code>AddExportLookup&lt;T&gt;()</code> /
+<code>AddRequestLookup&lt;T&gt;()</code> — a type registered for both directions is shared as a
+single instance, so there is exactly one cache to warm regardless of direction.</p>
+
+<h2>Writers — one row stream, three renderings</h2>
+<p>The engine produces a single depth-tagged row stream; each writer renders it without ever
+holding more than the current root subtree:</p>
+<ul>
+  <li><strong>JSON</strong> — roots as a streamed array; children grouped under a property named
+  after the child entity; declared dates render as <code>yyyy-MM-dd</code>.</li>
+  <li><strong>XML</strong> — document element named after the export; an element per entity row;
+  NULL as <code>nil="true"</code>. Names are XML-validated at registration, so a definition that
+  would corrupt the stream can't exist.</li>
+  <li><strong>CSV</strong> — flat: one file. Hierarchical: a zip of <code>{Entity}.csv</code>
+  with <code>_key</code>/<code>_parentKey</code> columns (the Loadstone-compatible convention).
+  Because a zip permits only one open entry while rows arrive interleaved, each entity buffers to
+  a temp <em>file</em> first — the one place Fathom uses disk instead of pure streaming; memory
+  stays bounded either way.</li>
+</ul>
+
+<h2>Definitions at rest</h2>
+<p>The registry is the in-memory truth; the definition directory is its durable mirror. A
+<code>PUT</code> validates → persists → registers, in that order, so a failed persist never
+leaves a live-but-unsaved definition. At startup the directory reloads: files that fail to parse
+<em>or validate</em> are logged and skipped — one bad file can't hold the host down. Both
+authoring styles (API PUT, file drop) converge on the same directory.</p>
+
+<h2>Observability &amp; operations</h2>
+<ul>
+  <li>One OpenTelemetry span per run, tagged with definition name and outcome
+  (<code>success</code>/<code>cancelled</code>/<code>error</code>); counters for runs and
+  per-entity rows; a duration histogram. Source and meter are both named <code>Fathom</code>.</li>
+  <li>Liveness (<code>/health/live</code>) is process-only <em>by design</em> — the database
+  check lives in readiness (<code>/health/ready</code>, cached + single-flighted), so a database
+  blip drains traffic instead of restart-looping replicas.</li>
+  <li>The run's disposal path tags failure before releasing readers, so the completion metric
+  reflects a mid-stream fault rather than a false success.</li>
+</ul>
+
+<div class="foot">
+Fathom · <a href="index.html">documentation home</a> ·
+<a href="using-fathom.html">Using Fathom</a> ·
+<a href="https://github.com/lodestar-labs/Fathom">github.com/lodestar-labs/Fathom</a>
+</div>
+
+</div>
+</body>
+</html>
