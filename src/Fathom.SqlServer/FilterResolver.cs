@@ -78,8 +78,12 @@ public sealed class FilterResolver(IEnumerable<IRequestLookupProvider> requestLo
                 {
                     if (!_providers.TryGetValue(lookupName, out var provider))
                     {
+                        // Deliberately a 500-shaped error, not FilterValidationException: the
+                        // caller did nothing wrong — the server's registered definition
+                        // references a provider its configuration never wired up.
                         throw new InvalidOperationException(
-                            $"Filter '{filterDef.Name}' references unregistered request lookup provider '{lookupName}'.");
+                            $"Filter '{filterDef.Name}' references request lookup '{lookupName}', which is not " +
+                            "registered. Register it (e.g. Fathom:CodeListLookups in configuration).");
                     }
 
                     try

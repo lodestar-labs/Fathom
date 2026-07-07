@@ -125,3 +125,29 @@ public class FilterResolverTests
             Resolver().ResolveAsync(TestData.Orders(), [new FilterValue("orderDateFrom", ["not-a-date"])]));
     }
 }
+
+[TestFixture]
+public class LookupRegistrationPreflightTests
+{
+    [Test]
+    public void Unregistered_export_lookup_fails_preflight_before_streaming()
+    {
+        // Configuration error semantics (500) are the recorded design; the fix is WHERE it
+        // fails - at pre-flight, before the 200 and the response body, never mid-stream.
+        var definition = TestData.Orders();   // Country field declares lookup "countries"
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            ExportQueryEngine.PreflightExportLookups(definition, registeredProviders: []));
+        Assert.That(ex!.Message, Does.Contain("countries"));
+    }
+
+    [Test]
+    public void Registered_export_lookup_passes_preflight()
+    {
+        var definition = TestData.Orders();
+
+        Assert.DoesNotThrow(() =>
+            ExportQueryEngine.PreflightExportLookups(definition, registeredProviders: ["Countries"]));
+        // case-insensitive on purpose — provider names are config-supplied
+    }
+}

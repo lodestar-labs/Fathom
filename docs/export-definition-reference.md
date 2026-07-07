@@ -1,3 +1,7 @@
+---
+title: Export definition reference
+---
+
 # Export definition reference
 
 An export definition is a JSON document that fully describes one export: the entity
@@ -45,7 +49,7 @@ names is fine — map it to a different output name with `column`.
 | `name` | string | required | Output name — the JSON property, XML element, or CSV file name. |
 | `table` | string | required | Source table. |
 | `schema` | string | `dbo` | Source schema. |
-| `keyColumn` | string | required | Primary key column on `table`. Never exposed in output unless also mapped as an ordinary field. |
+| `keyColumn` | string | required | Primary key column on `table`. Must be unique per row — a non-unique column fails at run time when the engine builds its unique staging index. Never exposed in output unless also mapped as an ordinary field. |
 | `parentKeyColumn` | string | required on children | Foreign key column on `table` referencing the parent's `keyColumn`. |
 | `fields` | field[] | required | At least one. |
 | `children` | entity[] | `[]` | Nested entities, any depth. |

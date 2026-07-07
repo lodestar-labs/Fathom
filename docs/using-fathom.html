@@ -82,10 +82,12 @@
 <pre><code>git clone https://github.com/lodestar-labs/Fathom.git
 cd Fathom
 docker compose up</code></pre>
-<p>Compose starts SQL Server, waits for it to be healthy, seeds the sample <code>Orders</code> /
-<code>OrderLines</code> tables, and starts Fathom on port 8080 with the
-<code>orders</code> sample export registered. Authentication is relaxed in the compose
-environment so you can explore; production requires a token (section 4).</p>
+<p>Compose starts SQL Server, waits for it to be healthy, and starts Fathom on port 8080 with the
+<code>orders</code> sample export definition registered. Two things it deliberately does
+<em>not</em> do: it doesn't create the sample <code>Orders</code>/<code>OrderLines</code> tables
+(bring your own data — Loadstone's sample import creates that exact schema), and it doesn't relax
+authentication — every <code>/api</code> call needs an Entra ID bearer token (section 4), even
+locally. Scalar, the OpenAPI document, and the health probes are open without a token.</p>
 <p>Three URLs to know:</p>
 <table>
   <tr><td><code>http://localhost:8080/scalar</code></td><td>Interactive API browser — every endpoint, callable from the page.</td></tr>

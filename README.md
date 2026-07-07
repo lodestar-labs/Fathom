@@ -73,9 +73,10 @@ docker compose up --build
 ```
 
 Open http://localhost:8080/scalar for the interactive API docs (the raw OpenAPI document
-is at `/openapi/v1.json`), and http://localhost:8080/health for the combined health check.
-Both work immediately, with no configuration — Fathom's own liveness/readiness probes and
-generated documentation never require authentication.
+is at `/openapi/v1.json`), and http://localhost:8080/health/live for the liveness probe.
+Both work immediately, with no configuration — probes and generated documentation never
+require authentication. (`/health` and `/health/ready` also check the database, so they
+report unhealthy until the `Fathom` database exists on the SQL container.)
 
 The sample **orders** export is registered automatically (from
 `samples/orders/orders.export.json`, against the same `Orders` / `OrderLines` schema
@@ -96,7 +97,8 @@ point `Fathom:ConnectionString` (or `ConnectionStrings:Fathom`) at any SQL Serve
 ## Describing an export
 
 A definition is the entire specification of one export. This is the sample shipped in
-`samples/orders`:
+`samples/orders` (abridged — the shipped file also carries a `version` and an
+`orderNumber` filter):
 
 ```json
 {

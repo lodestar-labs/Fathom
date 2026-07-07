@@ -58,6 +58,13 @@ public sealed class ExportQueryEngine(
         var disposables = new List<ReaderCursor>();
         try
         {
+            // Pre-flight every export lookup the definition references BEFORE anything is
+            // staged or streamed. Validate() cannot see DI-registered providers, so a
+            // definition naming a missing lookup would otherwise pass registration and then
+            // throw on the first row carrying that field — after the 200 and the start of
+            // the body, corrupting the download instead of failing cleanly.
+            PreflightExportLookups(definition, _exportLookups.Keys);
+
             var resolvedFilters = await filterResolver.ResolveAsync(definition, requestFilters, cancellationToken);
 
             connection = await connectionFactory.OpenAsync(cancellationToken);
@@ -175,6 +182,31 @@ public sealed class ExportQueryEngine(
         };
         FathomDiagnostics.ExportsCompleted.Add(1, tags);
         FathomDiagnostics.ExportDuration.Record(elapsed.TotalSeconds, tags);
+    }
+
+    /// <summary>
+    /// Fails fast when a definition references an export lookup name with no registered
+    /// provider. Deliberately a 500-shaped configuration error (the caller did nothing
+    /// wrong), but raised HERE — before the connection opens and the response starts —
+    /// so it can never surface mid-stream as a truncated download. Static so it is
+    /// unit-testable without a database.
+    /// </summary>
+    internal static void PreflightExportLookups(ExportDefinition definition, IEnumerable<string> registeredProviders)
+    {
+        var known = new HashSet<string>(registeredProviders, StringComparer.OrdinalIgnoreCase);
+        foreach (var entity in definition.EnumerateEntities())
+        {
+            foreach (var field in entity.Fields)
+            {
+                if (field.Lookup is { } lookupName && !known.Contains(lookupName))
+                {
+                    throw new InvalidOperationException(
+                        $"Field '{field.Name}' on entity '{entity.Name}' references export lookup '{lookupName}', " +
+                        "which is not registered. Register it (e.g. Fathom:CodeListLookups in configuration, or " +
+                        "AddExportLookup<T>() in code) or remove the lookup from the definition.");
+                }
+            }
+        }
     }
 
     private async Task<IReadOnlyDictionary<string, object?>> ApplyExportLookupsAsync(

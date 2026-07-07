@@ -236,6 +236,18 @@ public class ExportDefinitionTests
     }
 
     [Test]
+    public void Field_named_like_a_child_entity_is_an_error()
+    {
+        // JSON would emit duplicate property names (the scalar and the child array);
+        // XML consumers could not tell the field element from the child records.
+        var definition = TestData.Orders();
+        definition.Root.Fields.Add(new FieldDefinition { Name = "Line" });
+
+        Assert.That(definition.Validate(),
+            Has.Some.Contains("same name as a child entity"));
+    }
+
+    [Test]
     public void Field_ColumnName_defaults_to_field_name_when_column_is_unset() =>
         Assert.That(new FieldDefinition { Name = "Total" }.ColumnName, Is.EqualTo("Total"));
 

@@ -173,6 +173,13 @@ public sealed class ExportDefinition
                 errors.Add($"Entity '{entity.Name}': at least one field is required.");
             }
 
+            // A field named like a child entity would collide in the output: JSON would
+            // carry duplicate property names (the scalar and the child array), and in XML a
+            // consumer could not tell the field element from the child record elements.
+            var childNames = new HashSet<string>(
+                entity.Children.Select(c => c.Name).Where(n => !string.IsNullOrWhiteSpace(n)),
+                StringComparer.OrdinalIgnoreCase);
+
             var seenFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var field in entity.Fields)
             {
@@ -191,6 +198,10 @@ public sealed class ExportDefinition
                 else if (ReservedFieldNames.Contains(field.Name, StringComparer.OrdinalIgnoreCase))
                 {
                     errors.Add($"Entity '{entity.Name}': field name '{field.Name}' is reserved (RowNumber, ParentRowNumber, and RealKey are used internally by the engine).");
+                }
+                else if (childNames.Contains(field.Name))
+                {
+                    errors.Add($"Entity '{entity.Name}': field '{field.Name}' has the same name as a child entity — output formats could not distinguish the scalar from the child records.");
                 }
 
                 if (field.Column is { } column && !IsSafeSqlIdentifier(column))
